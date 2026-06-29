@@ -29,35 +29,32 @@ junit.xml
 # ── OS files ──────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+*.DS_Store
 
-# ── Editor / IDE ──────────────────────────────────────────────────────────
-.vscode/
-.idea/
-*.swp
-*.swo
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+# Test artifacts
+**/__snapshots__/
+*.snap
+coverage/
+playwright-report/
+test-results/
+junit.xml
+*.lcov
 
 # ── Logs ──────────────────────────────────────────────────────────────────
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
 
-# ── Misc ──────────────────────────────────────────────────────────────────
-.vercel/
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Misc
 .turbo/
+.vercel/
 .cache/
-.eslintcache
 *.tgz
-
-# ── Local-only docs (never push) ───────────────────────────────────────────
-ISSUES*.md
-grantfox_issues.md
-drip_wave_issues.md
-drip_wave2_issues.md
-create_issues*.py
+dist/

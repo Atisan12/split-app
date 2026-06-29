@@ -4,15 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { splitClient } from "@/lib/stellar";
 
-export type NotificationType =
-  | "payment"
-  | "funded"
-  | "released"
-  | "expired"
-  | "reminder"
-  | "subscription_billing"
-  | "subscription_paused"
-  | "subscription_cancelled";
+export type NotificationType = "payment" | "funded" | "released" | "expired";
 
 export interface AppNotification {
   id: string;
@@ -24,23 +16,6 @@ export interface AppNotification {
   read: boolean;
   /** Subscription id, present for subscription-related notifications. */
   subscriptionId?: string;
-}
-
-const SUBSCRIPTION_TYPES: ReadonlySet<NotificationType> = new Set<NotificationType>([
-  "subscription_billing",
-  "subscription_paused",
-  "subscription_cancelled",
-]);
-
-function isSubscriptionNotification(n: AppNotification): boolean {
-  return SUBSCRIPTION_TYPES.has(n.type) || typeof n.subscriptionId === "string";
-}
-
-function notificationHref(n: AppNotification): string {
-  if (isSubscriptionNotification(n) && n.subscriptionId) {
-    return `/subscriptions/${n.subscriptionId}`;
-  }
-  return `/invoice/${n.invoiceId}`;
 }
 
 const STORAGE_KEY = "stellarsplit_notifications_v2";
@@ -59,14 +34,6 @@ function loadNotifications(): AppNotification[] {
 
 function saveNotifications(notifications: AppNotification[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(notifications));
-}
-
-// Persists a "mark all as read" action against the notifications API.
-// The client currently has no dedicated endpoint for this, so notifications
-// are the source of truth locally; this hook keeps the call site ready for
-// when a real API is wired up, and gives markAllRead a real await/rollback path.
-async function persistMarkAllRead(ids: string[]): Promise<void> {
-  void ids;
 }
 
 function getSubscribedIds(): string[] {
@@ -97,17 +64,13 @@ const TYPE_ICONS: Record<NotificationType, string> = {
   funded: "✅",
   released: "🚀",
   expired: "⏰",
-  reminder: "📅",
-  subscription_billing: "🔁",
-  subscription_paused: "⏸️",
-  subscription_cancelled: "🚫",
 };
 
 export default function NotificationCenter() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const firstItemRef = useRef<HTMLAnchorElement>(null);
+  const firstItemRef = useRef<HTMLButtonElement>(null);
 
   const syncFromStorage = useCallback(() => {
     setNotifications(loadNotifications());
@@ -251,6 +214,16 @@ export default function NotificationCenter() {
   const unread = notifications.filter((n) => !n.read).length;
   const badgeCount = unread > 99 ? "99+" : unread > 0 ? String(unread) : null;
 
+  // Focus first item when opening
+  useEffect(() => {
+    if (open) {
+      setTimeout(() => firstItemRef.current?.focus(), 50);
+    }
+  }, [open]);
+
+  const unread = notifications.filter((n) => !n.read).length;
+  const badgeCount = unread > 99 ? "99+" : unread > 0 ? String(unread) : null;
+
   const markAllRead = async () => {
     const previous = notifications;
     const updated = notifications.map((n) => ({ ...n, read: true }));
@@ -337,8 +310,8 @@ export default function NotificationCenter() {
               {sorted.map((n, idx) => (
                 <li key={n.id} role="listitem">
                   <Link
-                    href={notificationHref(n)}
-                    ref={idx === 0 ? firstItemRef : undefined}
+                    href={`/invoice/${n.invoiceId}`}
+                    ref={idx === 0 ? (firstItemRef as React.Ref<HTMLAnchorElement>) : undefined}
                     onClick={() => { markRead(n.id); setOpen(false); }}
                     className={`flex items-start gap-3 w-full px-4 py-3 hover:bg-white/[0.04] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500 ${
                       !n.read ? "bg-brand-600/10" : ""

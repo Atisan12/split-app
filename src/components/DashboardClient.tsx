@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import Link from "next/link";
-import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
+import { splitClient } from "@/lib/stellar";
 import { getFreighterPublicKey } from "@/lib/freighter";
 import { splitClient } from "@/lib/stellar";
 import InvoiceSearch from "@/components/InvoiceSearch";
@@ -28,12 +30,9 @@ import {
   SORT_OPTIONS,
   filterDashboardInvoices,
   getDashboardPresetCounts,
-  matchesStatusFilter,
-  INVOICE_STATUS_FILTERS,
   sortInvoices,
   filterByDateRange,
   type DashboardPresetId,
-  type InvoiceStatusFilter,
   type DashboardSortId,
 } from "@/lib/dashboardFilters";
 import { useInvoiceTags } from "@/hooks/useInvoiceTags";
@@ -56,26 +55,27 @@ function readParams(sp: URLSearchParams) {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+// ── URL helpers ──────────────────────────────────────────────────────────────
+
+function readParams(sp: URLSearchParams) {
+  const statuses = (sp.get("status") ?? "").split(",").filter(Boolean) as DashboardPresetId[];
+  const sort = (sp.get("sort") ?? "newest") as DashboardSortId;
+  const dateFrom = sp.get("from") ?? "";
+  const dateTo = sp.get("to") ?? "";
+  return { statuses, sort, dateFrom, dateTo };
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export default function DashboardClient() {
   const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
 
   // URL-derived filter state
-  const { presetFilters, sort, dateFrom, dateTo, tag } = useMemo(
+  const { statuses, sort, dateFrom, dateTo } = useMemo(
     () => readParams(searchParams),
     [searchParams],
   );
-
-  const selectedStatuses = useMemo<InvoiceStatusFilter[]>(() => {
-    const raw = searchParams.get("status");
-    if (!raw) return [];
-    return raw
-      .split(",")
-      .filter((s): s is InvoiceStatusFilter => INVOICE_STATUS_FILTERS.includes(s as InvoiceStatusFilter));
-  }, [searchParams]);
-
-  const { allTags, tagsByInvoice } = useInvoiceTags();
 
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [walletError, setWalletError] = useState<string | null>(null);
@@ -92,14 +92,38 @@ export default function DashboardClient() {
   const [bulkReminderResults, setBulkReminderResults] = useState<BulkReminderResult[] | null>(null);
   // Mobile filter drawer
   const [drawerOpen, setDrawerOpen] = useState(false);
-  // Activity feed panel
-  const [feedOpen, setFeedOpen] = useState(false);
-  const { unreadCount } = useActivityFeed();
-  const [splitMetaMap, setSplitMetaMap] = useState<
-    Record<string, { installments?: { dueDate: number; status: string }[] }>
-  >({});
-  // Compare mode
-  const [shareQRInvoiceId, setShareQRInvoiceId] = useState<string | null>(null);
+
+  // ── URL mutation helpers ────────────────────────────────────────────────────
+
+  const pushParams = useCallback(
+    (updates: Record<string, string>) => {
+      const sp = new URLSearchParams(searchParams.toString());
+      for (const [k, v] of Object.entries(updates)) {
+        if (v) sp.set(k, v);
+        else sp.delete(k);
+      }
+      router.replace(`?${sp.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
+
+  const toggleStatus = (preset: DashboardPresetId) => {
+    const next = statuses.includes(preset)
+      ? statuses.filter((s) => s !== preset)
+      : [...statuses, preset];
+    pushParams({ status: next.join(",") });
+  };
+
+  const clearFilters = () => {
+    router.replace("?", { scroll: false });
+    setSearchValue("");
+  };
+
+  const isFiltered =
+    statuses.length > 0 || dateFrom || dateTo || sort !== "newest";
+
+  // ── Data fetching ───────────────────────────────────────────────────────────
+  const [activePreset, setActivePreset] = useState<DashboardPresetId>("all");
   const [compareMode, setCompareMode] = useState(false);
   const [compareSelected, setCompareSelected] = useState<Set<string>>(new Set());
   const [activePreset, setActivePreset] = useState<DashboardPresetId>("all");
@@ -247,11 +271,10 @@ export default function DashboardClient() {
 
   // ── Data fetching ───────────────────────────────────────────────────────────
 
-  // Get wallet public key
   useEffect(() => {
     getFreighterPublicKey()
       .then(setPublicKey)
-      .catch(() => setWalletError("Connect your Freighter wallet to view your dashboard."));
+      .catch(() => setError("Connect your Freighter wallet to view your dashboard."));
   }, []);
 
   // Infinite-scroll invoice list
@@ -280,22 +303,19 @@ export default function DashboardClient() {
 
   // Fetch splitMeta for overdue detection
   useEffect(() => {
-    if (!publicKey || invoices.length === 0) return;
-    let cancelled = false;
-    (async () => {
-      const map: Record<string, { installments?: { dueDate: number; status: string }[] }> = {};
-      await Promise.all(
-        invoices.map(async (inv) => {
-          try {
-            const res = await fetch(`/api/invoices/${inv.id}`);
-            if (res.ok) {
-              const json = await res.json();
-              if (json.splitMeta?.installments) {
-                map[inv.id] = json.splitMeta;
-              }
-            }
-          } catch {
-            // ignore
+    if (!publicKey) return;
+    const fetchInvoices = async () => {
+      setLoading(true);
+      const results: Invoice[] = [];
+      for (let id = 1; id <= 50; id++) {
+        try {
+          const inv = await splitClient.getInvoice(String(id));
+          const mine =
+            inv.creator === publicKey ||
+            inv.recipients.some((r) => r.address === publicKey);
+          if (mine) {
+            results.push(inv);
+            setInvoices([...results]);
           }
         })
       );
@@ -304,9 +324,10 @@ export default function DashboardClient() {
     return () => {
       cancelled = true;
     };
-  }, [publicKey, invoices]);
+    fetchInvoices().catch((e) => { setError(String(e)); setLoading(false); });
+  }, [publicKey]);
 
-  // ── Numeric search debounce ─────────────────────────────────────────────────
+  // Numeric search debounce
   useEffect(() => {
     const trimmed = searchValue.trim();
     if (!trimmed || !/^\d+$/.test(trimmed)) {
@@ -326,56 +347,33 @@ export default function DashboardClient() {
         if (!cancelled) setSearchLoading(false);
       }
     }, 300);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(t);
-    };
+    return () => { cancelled = true; window.clearTimeout(t); };
   }, [searchValue]);
 
   // ── Derived data ────────────────────────────────────────────────────────────
 
-  const presetCounts = useMemo(
-    () => getDashboardPresetCounts(invoices, Math.floor(Date.now() / 1000), splitMetaMap),
-    [invoices, splitMetaMap],
-  );
+  const presetCounts = useMemo(() => getDashboardPresetCounts(invoices), [invoices]);
 
   const visibleInvoices = useMemo(() => {
-    const now = Math.floor(Date.now() / 1000);
-    // 1. preset chips (multi-select); if none selected show all
+    // 1. status filter (multi-select chips); if none selected show all
     let result =
-      presetFilters.length === 0
+      statuses.length === 0
         ? invoices
         : invoices.filter((inv) =>
-            presetFilters.some(
-              (s) => filterDashboardInvoices([inv], s, now, splitMetaMap).length > 0,
+            statuses.some((s) =>
+              filterDashboardInvoices([inv], s).length > 0,
             ),
           );
-    // 2. lifecycle display-status chips
-    result = result.filter((inv) => matchesStatusFilter(inv, selectedStatuses, now));
-    // 3. date range
+    // 2. date range
     result = filterByDateRange(result, dateFrom, dateTo);
-    // 4. tag
-    if (tag) {
-      result = result.filter((inv) => invoiceHasTag(tagsByInvoice[inv.id] ?? [], tag));
-    }
-    // 5. sort
+    // 3. sort
     result = sortInvoices(result, sort);
     return result;
-  }, [invoices, presetFilters, selectedStatuses, dateFrom, dateTo, sort, tag, tagsByInvoice, splitMetaMap]);
-
-  // Rebuilding this object inline on every render would give InvoiceTable a
-  // new `displayNumbers` reference each time, defeating any memoization
-  // inside it even when the underlying list hasn't changed.
-  const tableDisplayNumbers = useMemo(
-    () => Object.fromEntries(visibleInvoices.map((inv) => [inv.id, getOrAssignDisplayNumber(inv.id)])),
-    [visibleInvoices],
-  );
+  }, [invoices, statuses, dateFrom, dateTo, sort]);
 
   const { totalActive, totalValueLocked, totalReleased } = useMemo(() => {
     const now = Math.floor(Date.now() / 1000);
-    let tvl = 0n,
-      released = 0n,
-      active = 0;
+    let tvl = 0n, released = 0n, active = 0;
     for (const inv of invoices) {
       const total = inv.recipients.reduce((s, r) => s + r.amount, 0n);
       if (inv.status === "Pending") {
@@ -391,26 +389,19 @@ export default function DashboardClient() {
   const pendingInvoices = invoices.filter((inv) => inv.status === "Pending");
   const selectedInvoices = invoices.filter((inv) => selected.has(inv.id));
 
-  // ── Selection handlers ─────────────────────────────────────────────────────
-
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   };
-  const exitMultiSelect = () => {
-    setMultiSelect(false);
-    setSelected(new Set());
-  };
+  const exitMultiSelect = () => { setMultiSelect(false); setSelected(new Set()); };
 
   const toggleReminderSelect = (id: string) => {
     setReminderSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   };
@@ -464,11 +455,7 @@ export default function DashboardClient() {
   // ── Error state ─────────────────────────────────────────────────────────────
 
   if (error) {
-    return (
-      <div className="text-center py-20">
-        <p className="text-red-400">{error}</p>
-      </div>
-    );
+    return <div className="text-center py-20"><p className="text-red-400">{error}</p></div>;
   }
 
   // ── Filter / sort controls (shared between sticky bar and drawer) ──────────
@@ -480,13 +467,13 @@ export default function DashboardClient() {
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Status</p>
         <div className="flex flex-wrap gap-2">
           {DASHBOARD_PRESETS.map((preset) => {
-            const active = presetFilters.includes(preset.id);
+            const active = statuses.includes(preset.id);
             const count = presetCounts[preset.id] ?? 0;
             return (
               <button
                 key={preset.id}
                 type="button"
-                onClick={() => togglePresetFilter(preset.id)}
+                onClick={() => toggleStatus(preset.id)}
                 aria-pressed={active}
                 className={`rounded-full px-3 py-1.5 text-sm font-semibold transition-colors ${
                   active
@@ -503,12 +490,9 @@ export default function DashboardClient() {
       </div>
 
       {/* Date range */}
-
       <div className="flex flex-wrap gap-3 items-end">
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-gray-500" htmlFor="filter-from">
-            From
-          </label>
+          <label className="text-xs font-medium text-gray-500" htmlFor="filter-from">From</label>
           <input
             id="filter-from"
             type="date"
@@ -518,9 +502,7 @@ export default function DashboardClient() {
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-gray-500" htmlFor="filter-to">
-            To
-          </label>
+          <label className="text-xs font-medium text-gray-500" htmlFor="filter-to">To</label>
           <input
             id="filter-to"
             type="date"
@@ -529,58 +511,21 @@ export default function DashboardClient() {
             className="min-h-9 rounded-lg bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
         </div>
-
-      <div className="flex items-end gap-2">
-        <DateRangeFilter from={dateFrom} to={dateTo} />
-
-      </div>
-      </div>
-
-      {/* Tag */}
-      <div className="flex flex-col gap-1">
-        <label
-          className="text-xs font-semibold text-gray-500 uppercase tracking-wide"
-          htmlFor="filter-tag"
-        >
-          Filter by tag
-        </label>
-        <select
-          id="filter-tag"
-          value={tag}
-          onChange={(e) => pushParams({ tag: e.target.value })}
-          className="min-h-9 rounded-lg bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        >
-          <option value="">All tags</option>
-          {allTags.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-          {/* Keep a ?tag= value from the URL selectable even if no invoice
-              currently carries it, so the control never silently resets. */}
-          {tag && !allTags.includes(tag) && <option value={tag}>{tag}</option>}
-        </select>
       </div>
 
       {/* Sort */}
       <div className="flex flex-col gap-1">
-        <label
-          className="text-xs font-semibold text-gray-500 uppercase tracking-wide"
-          htmlFor="filter-sort"
-        >
-          Sort by
-        </label>
-        <AdvancedSortSelect
+        <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide" htmlFor="filter-sort">Sort by</label>
+        <select
           id="filter-sort"
           value={sort}
-          onChange={(s) => pushParams({ sort: s })}
-        />
-      </div>
-
-      {/* Saved presets */}
-      <div>
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Presets</p>
-        <FilterPresetDropdown currentFilters={currentFilterState} onApply={applyFilterPreset} />
+          onChange={(e) => pushParams({ sort: e.target.value })}
+          className="min-h-9 rounded-lg bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        >
+          {SORT_OPTIONS.map((o) => (
+            <option key={o.id} value={o.id}>{o.label}</option>
+          ))}
+        </select>
       </div>
 
       {/* Clear */}
@@ -675,16 +620,11 @@ export default function DashboardClient() {
           )}
           {multiSelect && (
             <>
-              <button
-                onClick={exitMultiSelect}
-                className="min-h-11 px-4 py-2 rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-semibold transition-colors"
-              >
-                Cancel
-              </button>
+              <button onClick={exitMultiSelect} className="min-h-11 px-4 py-2 rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-semibold transition-colors">Cancel</button>
               <button
                 onClick={() => setShowBatchModal(true)}
                 disabled={selected.size === 0}
-                className="min-h-11 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors disabled:opacity-50"
+                className="min-h-11 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold transition-colors disabled:opacity-50"
               >
                 Pay Selected ({selected.size})
               </button>
@@ -692,21 +632,17 @@ export default function DashboardClient() {
           )}
           {reminderSelect && (
             <>
-              <button
-                onClick={exitReminderSelect}
-                className="min-h-11 px-4 py-2 rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-semibold transition-colors"
-              >
-                Cancel
-              </button>
+              <button onClick={exitReminderSelect} className="min-h-11 px-4 py-2 rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-semibold transition-colors">Cancel</button>
               <button
                 onClick={() => setShowReminderPicker(true)}
                 disabled={reminderSelected.size === 0}
-                className="min-h-11 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors disabled:opacity-50"
+                className="min-h-11 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold transition-colors disabled:opacity-50"
               >
                 Set Reminder ({reminderSelected.size})
               </button>
             </>
           )}
+          <Link href="/invoice/new" className="min-h-11 inline-flex items-center px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold transition-colors">
           {compareMode && (
             <>
               <button
@@ -805,24 +741,18 @@ export default function DashboardClient() {
           aria-controls="filter-drawer"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path
-              d="M2 4h12M4 8h8M6 12h4"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            />
+            <path d="M2 4h12M4 8h8M6 12h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
           </svg>
-          Filters{" "}
-          {isFiltered && (
-            <span className="ml-1 rounded-full bg-indigo-600 text-white text-xs px-1.5 py-0.5">on</span>
-          )}
+          Filters {isFiltered && <span className="ml-1 rounded-full bg-indigo-600 text-white text-xs px-1.5 py-0.5">on</span>}
         </button>
+        {isFiltered && (
+          <button type="button" onClick={clearFilters} className="text-sm text-indigo-400 hover:text-indigo-300 transition-colors">
+            Clear filters
+          </button>
+        )}
       </div>
       {drawerOpen && (
-        <div
-          id="filter-drawer"
-          className="md:hidden mb-6 rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4"
-        >
+        <div id="filter-drawer" className="md:hidden mb-6 rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4">
           {filterControls}
         </div>
       )}
@@ -840,22 +770,15 @@ export default function DashboardClient() {
       {/* Invoice count */}
       {!loading && invoices.length > 0 && (
         <p className="text-sm text-gray-500 mb-4" aria-live="polite">
-          Showing {visibleInvoices.length} of {invoices.length} invoice
-          {invoices.length !== 1 ? "s" : ""}
+          Showing {visibleInvoices.length} of {invoices.length} invoice{invoices.length !== 1 ? "s" : ""}
         </p>
       )}
 
-      {/* Selection mode messages */}
-      {multiSelect && (
-        <p className="text-sm text-gray-400 mb-4" role="status">
-          Select pending invoices to pay in a single transaction.
-        </p>
-      )}
-      {reminderSelect && (
-        <p className="text-sm text-gray-400 mb-4" role="status">
-          Select invoices to schedule a reminder for.
-        </p>
-      )}
+      {/* Multi-select messages */}
+      {multiSelect && <p className="text-sm text-gray-400 mb-4" role="status">Select pending invoices to pay in a single transaction.</p>}
+      {reminderSelect && <p className="text-sm text-gray-400 mb-4" role="status">Select invoices to schedule a reminder for.</p>}
+
+      {/* Bulk reminder results */}
       {compareMode && (
         <p className="text-sm text-gray-400 mb-4" role="status">
           Select up to 2 invoices to compare side-by-side.
@@ -871,21 +794,13 @@ export default function DashboardClient() {
           <ul className="flex flex-col gap-1">
             {bulkReminderResults.map((r) => (
               <li key={r.invoiceId} className="text-xs flex items-center gap-2">
-                <span className={r.success ? "text-green-400" : "text-red-400"}>
-                  {r.success ? "✓" : "✗"}
-                </span>
+                <span className={r.success ? "text-green-400" : "text-red-400"}>{r.success ? "✓" : "✗"}</span>
                 <span className="text-gray-700 dark:text-gray-300">Invoice #{r.invoiceId}</span>
                 {!r.success && r.error && <span className="text-red-400">{r.error}</span>}
               </li>
             ))}
           </ul>
-          <button
-            type="button"
-            onClick={() => setBulkReminderResults(null)}
-            className="mt-3 text-xs text-gray-500 hover:text-gray-300 transition-colors"
-          >
-            Dismiss
-          </button>
+          <button type="button" onClick={() => setBulkReminderResults(null)} className="mt-3 text-xs text-gray-500 hover:text-gray-300 transition-colors">Dismiss</button>
         </div>
       )}
 
@@ -897,30 +812,16 @@ export default function DashboardClient() {
           ))}
         </div>
       ) : invoices.length === 0 ? (
-        <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/60 p-12 text-center">
-          <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">
-            No invoices yet
-          </h2>
-          <p className="text-gray-500 dark:text-gray-400 mb-6 max-w-sm mx-auto">
-            Create your first invoice to start receiving payments on-chain.
-          </p>
-          <Link
-            href="/invoice/new"
-            className="inline-flex items-center px-6 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors"
-          >
+        <div className="rounded-xl border border-gray-800 bg-gray-900/60 p-12 text-center">
+          <h2 className="text-xl font-semibold text-gray-300 mb-2">No invoices yet</h2>
+          <p className="text-gray-500 mb-6 max-w-sm mx-auto">Create your first invoice to start receiving payments on-chain.</p>
+          <Link href="/invoice/new" className="inline-flex items-center px-6 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold transition-colors">
             + Create your first invoice
           </Link>
         </div>
       ) : visibleInvoices.length === 0 ? (
         <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/60 p-6 text-center">
-          <p className="text-gray-400">
-            {presetFilters.length === 1
-              ? DASHBOARD_PRESETS.find((preset) => preset.id === presetFilters[0])?.emptyState ??
-                "No invoices match this view."
-              : searchValue.trim()
-              ? "No invoices match your search."
-              : "No invoices match the current filters."}
-          </p>
+          <p className="text-gray-400">No invoices match the current filters.</p>
         </div>
       ) : (
         viewMode === "table" && !multiSelect && !reminderSelect && !compareMode ? (
@@ -949,7 +850,34 @@ export default function DashboardClient() {
             const isMultiSelectable = isSelecting;
             const isMultiSelected = isBulkSelected(inv.id);
 
+            const card = (
+              <InvoiceCard invoice={inv} displayNumber={getOrAssignDisplayNumber(inv.id)} />
+            );
+
+            if (isSelectable) {
+              return (
+                <button key={inv.id} type="button" onClick={() => toggleSelect(inv.id)} aria-pressed={isSelected}
+                  className={`w-full text-left rounded-xl ring-2 transition-all ${isSelected ? "ring-indigo-500" : "ring-transparent hover:ring-gray-600"}`}>
+                  <div className="relative">
+                    {isSelected && <span aria-hidden="true" className="absolute top-3 right-3 w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center text-white text-xs font-bold z-10">✓</span>}
+                    {card}
+                  </div>
+                </button>
+              );
+            }
+            if (isReminderSelectable) {
+              return (
+                <button key={inv.id} type="button" onClick={() => toggleReminderSelect(inv.id)} aria-pressed={isReminderSelected}
+                  className={`w-full text-left rounded-xl ring-2 transition-all ${isReminderSelected ? "ring-indigo-500" : "ring-transparent hover:ring-gray-600"}`}>
+                  <div className="relative">
+                    {isReminderSelected && <span aria-hidden="true" className="absolute top-3 right-3 w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center text-white text-xs font-bold z-10">✓</span>}
+                    {card}
+                  </div>
+                </button>
+              );
+            }
             return (
+              <Link key={inv.id} href={`/invoice/${inv.id}`} className="block">{card}</Link>
               <div key={inv.id}>
                 {isMultiSelectable ? (
                   <button
@@ -1107,33 +1035,17 @@ export default function DashboardClient() {
         <BatchPayModal
           invoices={selectedInvoices}
           publicKey={publicKey}
-          onClose={() => {
-            setShowBatchModal(false);
-            exitMultiSelect();
-          }}
+          onClose={() => { setShowBatchModal(false); exitMultiSelect(); }}
         />
       )}
 
       {/* Reminder Picker Modal */}
       {showReminderPicker && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Schedule bulk reminders"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-        >
+        <div role="dialog" aria-modal="true" aria-label="Schedule bulk reminders" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-700 p-6 w-full max-w-sm">
             <h2 className="text-lg font-bold mb-4">Schedule Reminders</h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-              Applies to {reminderSelected.size} selected invoice
-              {reminderSelected.size !== 1 ? "s" : ""}.
-            </p>
-            <label
-              htmlFor="bulk-reminder-dt"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
-            >
-              Reminder date &amp; time
-            </label>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">Applies to {reminderSelected.size} selected invoice{reminderSelected.size !== 1 ? "s" : ""}.</p>
+            <label htmlFor="bulk-reminder-dt" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Reminder date &amp; time</label>
             <input
               id="bulk-reminder-dt"
               type="datetime-local"
@@ -1142,22 +1054,12 @@ export default function DashboardClient() {
               className="w-full min-h-11 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
             <div className="flex gap-3 justify-end">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowReminderPicker(false);
-                  setReminderDateTime("");
-                }}
-                className="px-4 py-2 rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
-              >
+              <button type="button" onClick={() => { setShowReminderPicker(false); setReminderDateTime(""); }}
+                className="px-4 py-2 rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-medium transition-colors">
                 Cancel
               </button>
-              <button
-                type="button"
-                onClick={handleScheduleBulkReminders}
-                disabled={!reminderDateTime}
-                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
-              >
+              <button type="button" onClick={handleScheduleBulkReminders} disabled={!reminderDateTime}
+                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium transition-colors disabled:opacity-50">
                 Schedule
               </button>
             </div>

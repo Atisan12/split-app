@@ -164,6 +164,92 @@ function buildEvents(
   return events;
 }
 
+interface TimelineEvent {
+  key: string;
+  icon: string;
+  label: string;
+  timestamp: number | null;
+  actor?: string;
+}
+
+function relativeTime(ts: number): string {
+  const diff = Math.floor((Date.now() / 1000) - ts);
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function absoluteTime(ts: number): string {
+  return new Date(ts * 1000).toLocaleString();
+}
+
+function truncate(addr: string) {
+  return addr.length > 12 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr;
+}
+
+function buildEvents(invoice: Invoice, total: bigint): TimelineEvent[] {
+  const events: TimelineEvent[] = [];
+
+  // Created — use deadline as a proxy anchor; SDK Invoice has no createdAt
+  events.push({
+    key: "created",
+    icon: "📄",
+    label: "Invoice Created",
+    timestamp: null,
+    actor: invoice.creator,
+  });
+
+  if (invoice.funded > 0n) {
+    events.push({
+      key: "first-payment",
+      icon: "💳",
+      label: "First Payment",
+      timestamp: null,
+    });
+  }
+
+  const milestone = total > 0n ? (total * 50n) / 100n : 0n;
+  if (invoice.funded >= milestone && milestone > 0n) {
+    events.push({
+      key: "milestone",
+      icon: "🏁",
+      label: "Milestone Reached (50%)",
+      timestamp: null,
+    });
+  }
+
+  if (total > 0n && invoice.funded >= total) {
+    events.push({
+      key: "fully-funded",
+      icon: "✅",
+      label: "Fully Funded",
+      timestamp: null,
+    });
+  }
+
+  if (invoice.status === "Released") {
+    events.push({
+      key: "released",
+      icon: "🚀",
+      label: "Funds Released",
+      timestamp: null,
+    });
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (invoice.status === "Pending" && invoice.deadline <= now) {
+    events.push({
+      key: "expired",
+      icon: "⏰",
+      label: "Invoice Expired",
+      timestamp: invoice.deadline,
+    });
+  }
+
+  return events;
+}
+
 interface Props {
   invoice: Invoice;
   total: bigint;
@@ -171,18 +257,13 @@ interface Props {
   disputes?: DisputeRecord[];
 }
 
-export default function StatusTimeline({ invoice, total, milestones = [], disputes = [] }: Props) {
-  const events = buildEvents(invoice, total, milestones, disputes);
-
-  const hasActiveDispute = disputes.some(
-    (d) => d.status !== "Resolved" && d.status !== "Enforced",
-  );
+export default function StatusTimeline({ invoice, total }: Props) {
+  const events = buildEvents(invoice, total);
 
   // ── Mobile: horizontal stepper ─────────────────────────────────────────────
-  const STEPS = ["Created", "Partially Funded", "Funded", "Released / Refunded"] as const;
+  const STEPS = ["Created", "Partially Funded", "Fully Funded", "Released / Refunded"] as const;
 
   function getActiveStep(): number {
-    if (hasActiveDispute) return 4;
     if (invoice.status === "Released" || invoice.status === "Refunded") return 3;
     if (total > 0n && invoice.funded >= total) return 2;
     if (invoice.funded > 0n) return 1;
@@ -190,25 +271,23 @@ export default function StatusTimeline({ invoice, total, milestones = [], disput
   }
 
   const active = getActiveStep();
-  const steps = hasActiveDispute ? [...STEPS, "Disputed"] : STEPS;
 
   return (
     <>
       {/* Mobile: compact horizontal stepper */}
       <div className="sm:hidden grid grid-cols-2 gap-y-4 mb-6">
-        {steps.map((step, i) => {
+        {STEPS.map((step, i) => {
           const done = i < active;
           const current = i === active;
-          const isDisputed = step === "Disputed";
           const label = i === 3 && invoice.status !== "Pending" ? invoice.status : step;
           return (
-            <div key={step} className={`flex-1 flex flex-col items-center min-w-0 px-1${current ? " text-white font-semibold" : ""}`}>
+            <div key={step} className="flex-1 flex flex-col items-center min-w-0 px-1">
               <div className="flex items-center w-full">
-                {i > 0 && <div className={`flex-1 h-0.5 ${done || current ? (isDisputed ? "bg-red-500" : "bg-indigo-500") : "bg-gray-700"}`} />}
-                <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 ${done ? (isDisputed ? "bg-red-500 border-red-500" : "bg-indigo-500 border-indigo-500") : current ? (isDisputed ? "bg-red-400 border-red-300" : "bg-white border-indigo-400") : "bg-gray-800 border-gray-600"}`} />
-                {i < steps.length - 1 && <div className={`flex-1 h-0.5 ${done ? (isDisputed ? "bg-red-500" : "bg-indigo-500") : "bg-gray-700"}`} />}
+                {i > 0 && <div className={`flex-1 h-0.5 ${done || current ? "bg-indigo-500" : "bg-gray-700"}`} />}
+                <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 ${done ? "bg-indigo-500 border-indigo-500" : current ? "bg-white border-indigo-400" : "bg-gray-800 border-gray-600"}`} />
+                {i < STEPS.length - 1 && <div className={`flex-1 h-0.5 ${done ? "bg-indigo-500" : "bg-gray-700"}`} />}
               </div>
-              <p className={`text-xs mt-1 text-center ${current ? (isDisputed ? "text-red-400 font-semibold" : "text-white font-semibold") : done ? (isDisputed ? "text-red-400" : "text-indigo-400") : "text-gray-500"}`}>
+              <p className={`text-xs mt-1 text-center ${current ? "text-white font-semibold" : done ? "text-indigo-400" : "text-gray-500"}`}>
                 {label}
               </p>
             </div>
@@ -249,8 +328,11 @@ export default function StatusTimeline({ invoice, total, milestones = [], disput
                     </p>
                   )}
                   {ev.timestamp ? (
-                    <p className="text-xs text-gray-500 mt-0.5 cursor-default">
-                      <RelativeTime iso={new Date(ev.timestamp * 1000).toISOString()} />
+                    <p
+                      className="text-xs text-gray-500 mt-0.5 cursor-default"
+                      title={absoluteTime(ev.timestamp)}
+                    >
+                      {relativeTime(ev.timestamp)}
                     </p>
                   ) : (
                     <p className="text-xs text-gray-600 mt-0.5 italic">timestamp pending</p>

@@ -792,24 +792,8 @@ export default function InvoiceDetailPage({ params }: Props) {
         <h2 id="timeline-heading" className="text-lg font-semibold text-white mb-4">Status Timeline</h2>
         <StatusTimeline invoice={invoice} total={total} />
       </section>
-      </InvoiceSection>
 
-      {canAct && invoice && (
-        <SplitSummaryCard
-          totalAmount={Number(total)}
-          recipientCount={invoice.recipients.length}
-        />
-      )}
-
-      {/* Payments Section */}
-      <InvoiceSection
-        sectionId="payments"
-        onFocusChange={updateFocusedSection}
-        className="mb-8"
-      >
-      {/* Top Contributors Leaderboard */}
-      <InvoiceLeaderboard invoice={invoice} publicKey={publicKey} className="mb-6" />
-
+      {/* Payments */}
       <section className="mb-8">
         <h2 className="text-lg font-semibold text-white mb-3">
           Payments ({invoice.payments.length})
