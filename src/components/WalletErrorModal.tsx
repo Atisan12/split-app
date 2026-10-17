@@ -8,6 +8,10 @@ export type WalletErrorType =
   | "locked"
   | "rejected"
   | "network_mismatch"
+  | "ledger_not_connected"
+  | "ledger_locked"
+  | "ledger_app_not_open"
+  | "ledger_denied"
   | null;
 
 interface Props {
@@ -140,6 +144,190 @@ function NetworkMismatchContent({
   );
 }
 
+function LedgerNotConnectedContent({
+  onRetry,
+  onDismiss,
+}: {
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <>
+      <div className="flex flex-col items-center text-center gap-3 mb-6">
+        <span className="text-4xl" aria-hidden="true">🔌</span>
+        <h2 className="text-lg font-bold text-white">Ledger Not Connected</h2>
+        <p className="text-sm text-slate-400">
+          We couldn&apos;t find your Ledger device. Connect it via USB and make sure
+          it&apos;s powered on.
+        </p>
+      </div>
+      <ol className="text-sm text-slate-400 space-y-2 mb-6 text-left">
+        <li className="flex gap-2">
+          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-brand-600/30 text-brand-300 text-xs flex items-center justify-center font-bold">1</span>
+          Plug your Ledger into your computer with a USB cable.
+        </li>
+        <li className="flex gap-2">
+          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-brand-600/30 text-brand-300 text-xs flex items-center justify-center font-bold">2</span>
+          Unlock the device with your PIN.
+        </li>
+        <li className="flex gap-2">
+          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-brand-600/30 text-brand-300 text-xs flex items-center justify-center font-bold">3</span>
+          Return here and click <span className="text-white font-medium">Try Again</span>.
+        </li>
+      </ol>
+      <div className="flex flex-col gap-3">
+        <button
+          onClick={onRetry}
+          className="w-full h-10 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-semibold transition-colors"
+        >
+          Try Again
+        </button>
+        <button
+          onClick={onDismiss}
+          className="w-full h-10 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 text-sm font-medium transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    </>
+  );
+}
+
+function LedgerLockedContent({
+  onRetry,
+  onDismiss,
+}: {
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <>
+      <div className="flex flex-col items-center text-center gap-3 mb-6">
+        <span className="text-4xl" aria-hidden="true">🔒</span>
+        <h2 className="text-lg font-bold text-white">Ledger is Locked</h2>
+        <p className="text-sm text-slate-400">
+          Your Ledger device is locked. Unlock it with your PIN, then try again.
+        </p>
+      </div>
+      <ol className="text-sm text-slate-400 space-y-2 mb-6 text-left">
+        <li className="flex gap-2">
+          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-brand-600/30 text-brand-300 text-xs flex items-center justify-center font-bold">1</span>
+          Enter your PIN directly on the Ledger device.
+        </li>
+        <li className="flex gap-2">
+          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-brand-600/30 text-brand-300 text-xs flex items-center justify-center font-bold">2</span>
+          Keep the device connected via USB.
+        </li>
+        <li className="flex gap-2">
+          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-brand-600/30 text-brand-300 text-xs flex items-center justify-center font-bold">3</span>
+          Return here and click <span className="text-white font-medium">Try Again</span>.
+        </li>
+      </ol>
+      <div className="flex flex-col gap-3">
+        <button
+          onClick={onRetry}
+          className="w-full h-10 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-semibold transition-colors"
+        >
+          Try Again
+        </button>
+        <button
+          onClick={onDismiss}
+          className="w-full h-10 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 text-sm font-medium transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    </>
+  );
+}
+
+function LedgerAppNotOpenContent({
+  onRetry,
+  onDismiss,
+}: {
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <>
+      <div className="flex flex-col items-center text-center gap-3 mb-6">
+        <span className="text-4xl" aria-hidden="true">📱</span>
+        <h2 className="text-lg font-bold text-white">Open the Stellar App</h2>
+        <p className="text-sm text-slate-400">
+          The Stellar app must be open on your Ledger device to sign transactions.
+        </p>
+      </div>
+      <ol className="text-sm text-slate-400 space-y-2 mb-6 text-left">
+        <li className="flex gap-2">
+          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-brand-600/30 text-brand-300 text-xs flex items-center justify-center font-bold">1</span>
+          Unlock your Ledger device with your PIN.
+        </li>
+        <li className="flex gap-2">
+          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-brand-600/30 text-brand-300 text-xs flex items-center justify-center font-bold">2</span>
+          Navigate to the <span className="text-white font-medium">Stellar</span> app and open it.
+        </li>
+        <li className="flex gap-2">
+          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-brand-600/30 text-brand-300 text-xs flex items-center justify-center font-bold">3</span>
+          Return here and click <span className="text-white font-medium">Try Again</span>.
+        </li>
+      </ol>
+      <div className="flex flex-col gap-3">
+        <button
+          onClick={onRetry}
+          className="w-full h-10 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-semibold transition-colors"
+        >
+          Try Again
+        </button>
+        <button
+          onClick={onDismiss}
+          className="w-full h-10 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 text-sm font-medium transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    </>
+  );
+}
+
+function LedgerDeniedContent({
+  onRetry,
+  onDismiss,
+}: {
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <>
+      <div className="flex flex-col items-center text-center gap-3 mb-6">
+        <span className="text-4xl" aria-hidden="true">🚫</span>
+        <h2 className="text-lg font-bold text-white">Transaction Rejected</h2>
+        <p className="text-sm text-slate-400">
+          The transaction was rejected on your Ledger device. Nothing was signed
+          or submitted.
+        </p>
+      </div>
+      <p className="text-sm text-slate-400 mb-6 text-left">
+        To sign, review the transaction details on the device and approve them.
+        You can safely try again.
+      </p>
+      <div className="flex flex-col gap-3">
+        <button
+          onClick={onRetry}
+          className="w-full h-10 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-semibold transition-colors"
+        >
+          Try Again
+        </button>
+        <button
+          onClick={onDismiss}
+          className="w-full h-10 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 text-sm font-medium transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    </>
+  );
+}
+
 export default function WalletErrorModal({
   errorType,
   onDismiss,
@@ -202,6 +390,18 @@ export default function WalletErrorModal({
             expectedNetwork={expectedNetwork}
             onDismiss={onDismiss}
           />
+        )}
+        {errorType === "ledger_not_connected" && (
+          <LedgerNotConnectedContent onRetry={onRetry} onDismiss={onDismiss} />
+        )}
+        {errorType === "ledger_locked" && (
+          <LedgerLockedContent onRetry={onRetry} onDismiss={onDismiss} />
+        )}
+        {errorType === "ledger_app_not_open" && (
+          <LedgerAppNotOpenContent onRetry={onRetry} onDismiss={onDismiss} />
+        )}
+        {errorType === "ledger_denied" && (
+          <LedgerDeniedContent onRetry={onRetry} onDismiss={onDismiss} />
         )}
       </div>
     </div>

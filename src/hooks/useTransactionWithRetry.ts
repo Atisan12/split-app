@@ -15,6 +15,48 @@ const DEFAULT_OPTIONS = {
   retryableStatusCodes: [429],
 };
 
+// Ledger hardware wallet error codes/messages that should never be retried.
+const LEDGER_ERROR_PATTERNS = [
+  'disconnected',
+  'device disconnected',
+  'no device',
+  'device not found',
+  'app not open',
+  'app is not open',
+  'stellar app',
+  'locked',
+  'device locked',
+  'denied',
+  'user rejected',
+  '0x6b0c',
+  '0x5515',
+  '0x6985',
+];
+
+const LEDGER_ERROR_MESSAGES: Record<string, string> = {
+  disconnected: 'Ledger device disconnected. Please reconnect your device and try again.',
+  'no device': 'No Ledger device found. Please connect your Ledger and try again.',
+  'app not open': 'Please open the Stellar app on your Ledger device and try again.',
+  locked: 'Your Ledger device is locked. Please unlock it and try again.',
+  denied: 'Transaction was rejected on your Ledger device.',
+};
+
+function isLedgerError(error: any): boolean {
+  const message = String(error?.message || error || '').toLowerCase();
+  const name = String(error?.name || '').toLowerCase();
+  const code = String(error?.code || error?.statusCode || '').toLowerCase();
+  const haystack = `${message} ${name} ${code}`;
+  return LEDGER_ERROR_PATTERNS.some((pattern) => haystack.includes(pattern));
+}
+
+function getLedgerErrorMessage(error: any): string {
+  const message = String(error?.message || error || '').toLowerCase();
+  for (const [key, friendly] of Object.entries(LEDGER_ERROR_MESSAGES)) {
+    if (message.includes(key)) return friendly;
+  }
+  return 'Ledger device error. Please check your connection and try again.';
+}
+
 export function useTransactionWithRetry(options?: RetryOptions) {
   const toast = useToast();
   const abortControllers = useRef<Map<string, AbortController>>(new Map());
@@ -63,6 +105,14 @@ export function useTransactionWithRetry(options?: RetryOptions) {
           return result;
         } catch (error) {
           lastError = error instanceof Error ? error : new Error(String(error));
+
+          // Ledger hardware wallet errors are never retryable; surface a clear message.
+          if (isLedgerError(error)) {
+            if (toastId) toast.dismiss(toastId);
+            toast.error(getLedgerErrorMessage(error));
+            throw lastError;
+          }
+
           const statusCode = getStatusCode(error);
           const isRetryable =
             opts.retryableStatusCodes.includes(statusCode!) &&

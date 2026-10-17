@@ -7,6 +7,9 @@ interface NotificationPreferences {
   deadlineApproaching: boolean;
   invoiceReleased: boolean;
   invoiceRefunded: boolean;
+  subscriptionBilling: boolean;
+  subscriptionPaused: boolean;
+  subscriptionCancelled: boolean;
 }
 
 const DEFAULT_PREFS: NotificationPreferences = {
@@ -15,6 +18,9 @@ const DEFAULT_PREFS: NotificationPreferences = {
   deadlineApproaching: true,
   invoiceReleased: true,
   invoiceRefunded: true,
+  subscriptionBilling: true,
+  subscriptionPaused: true,
+  subscriptionCancelled: true,
 };
 
 function getPreferences(): NotificationPreferences {
@@ -127,6 +133,36 @@ export function notifyInvoiceRefunded(invoiceId: string): void {
   sendBrowserNotification(`Invoice #${invoiceId} refunded`, {
     body: "All payments have been refunded.",
     tag: `invoice-refunded-${invoiceId}`,
+  });
+}
+
+/** Notify when a subscription billing charge occurs. */
+export function notifySubscriptionBilling(subId: string, amountLabel: string): void {
+  const prefs = getPreferences();
+  if (!prefs.subscriptionBilling) return;
+  sendBrowserNotification(`Subscription #${subId} billed`, {
+    body: `${amountLabel} USDC charged for your subscription.`,
+    tag: `subscription-billing-${subId}`,
+  });
+}
+
+/** Notify when a subscription is paused. */
+export function notifySubscriptionPaused(subId: string): void {
+  const prefs = getPreferences();
+  if (!prefs.subscriptionPaused) return;
+  sendBrowserNotification(`Subscription #${subId} paused`, {
+    body: "Billing is paused until you resume the subscription.",
+    tag: `subscription-paused-${subId}`,
+  });
+}
+
+/** Notify when a subscription is cancelled, including the recorded reason. */
+export function notifySubscriptionCancelled(subId: string, reason: string): void {
+  const prefs = getPreferences();
+  if (!prefs.subscriptionCancelled) return;
+  sendBrowserNotification(`Subscription #${subId} cancelled`, {
+    body: reason ? `Reason: ${reason}` : "The subscription has been cancelled.",
+    tag: `subscription-cancelled-${subId}`,
   });
 }
 

@@ -51,6 +51,34 @@ const ERROR_MAPPING: Record<string, ParsedStellarError> = {
     suggestedAction: 'Establish a trustline for this asset first, then retry.',
     actionType: 'manual',
   },
+  ledger_not_connected: {
+    code: 'ledger_not_connected',
+    title: 'Ledger Device Not Connected',
+    explanation: 'No Ledger hardware wallet was detected. The device may be unplugged, or the browser may not have permission to access it.',
+    suggestedAction: 'Connect your Ledger device via USB, unlock it, and make sure the Stellar app is installed. Then retry the connection.',
+    actionType: 'manual',
+  },
+  ledger_locked: {
+    code: 'ledger_locked',
+    title: 'Ledger Device Locked',
+    explanation: 'The Ledger device is locked and cannot sign transactions until it is unlocked.',
+    suggestedAction: 'Unlock your Ledger device with your PIN, open the Stellar app, and retry.',
+    actionType: 'manual',
+  },
+  ledger_app_not_open: {
+    code: 'ledger_app_not_open',
+    title: 'Stellar App Not Open on Ledger',
+    explanation: 'The Ledger device is connected but the Stellar app is not currently open.',
+    suggestedAction: 'Open the Stellar app on your Ledger device and retry the operation.',
+    actionType: 'manual',
+  },
+  ledger_denied: {
+    code: 'ledger_denied',
+    title: 'Transaction Rejected on Ledger',
+    explanation: 'The transaction was rejected on the Ledger device. Signing was cancelled or the transaction details were not approved.',
+    suggestedAction: 'Review the transaction details on your Ledger device and approve the signing request, then retry.',
+    actionType: 'manual',
+  },
 };
 
 export function parseStellarError(errorCode: string, rawError?: any): ParsedStellarError {

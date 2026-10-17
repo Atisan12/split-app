@@ -8,6 +8,8 @@ import { getFreighterPublicKey } from "@/lib/freighter";
 import { generateCsv, type CsvRow } from "@/lib/csvExport";
 import type { Invoice } from "@stellar-split/sdk";
 import ChartBuilder, { type ChartBuilderDataPoint } from "@/components/analytics/ChartBuilder";
+import AnalyticsPanel from "@/components/subscriptions/AnalyticsPanel";
+import { loadSubscriptions, type Subscription } from "@/lib/subscriptions";
 
 const STROOPS = 10_000_000;
 
@@ -119,6 +121,10 @@ export default function AnalyticsPage() {
   const [error, setError] = useState<string | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [activeTab, setActiveTab] = useState<"invoices" | "subscriptions">(
+    "invoices"
+  );
 
   useEffect(() => {
     getFreighterPublicKey()
@@ -153,6 +159,17 @@ export default function AnalyticsPage() {
       }
     };
     fetchInvoices();
+  }, [publicKey]);
+
+  useEffect(() => {
+    if (!publicKey) return;
+    try {
+      setSubscriptions(loadSubscriptions(publicKey));
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to load subscriptions"
+      );
+    }
   }, [publicKey]);
 
   const filtered = useMemo(() => {
@@ -397,6 +414,37 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
+        <div className="flex gap-1 mb-6 border-b border-gray-800">
+          <button
+            type="button"
+            onClick={() => setActiveTab("invoices")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              activeTab === "invoices"
+                ? "border-indigo-500 text-white"
+                : "border-transparent text-gray-400 hover:text-gray-200"
+            }`}
+          >
+            Invoices
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("subscriptions")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              activeTab === "subscriptions"
+                ? "border-indigo-500 text-white"
+                : "border-transparent text-gray-400 hover:text-gray-200"
+            }`}
+          >
+            Subscriptions
+          </button>
+        </div>
+
+        {activeTab === "subscriptions" ? (
+          <div className="mb-8">
+            <AnalyticsPanel subscriptions={subscriptions} />
+          </div>
+        ) : (
+          <>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <KpiCard
             label="Total Raised"
@@ -504,6 +552,8 @@ export default function AnalyticsPage() {
             </div>
           )}
         </div>
+          </>
+        )}
 
         <Link
           href="/dashboard"

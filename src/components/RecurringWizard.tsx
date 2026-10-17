@@ -7,6 +7,8 @@ interface RecurringConfig {
   intervalDays: 7 | 30;
   endDate?: string;
   maxOccurrences?: number;
+  /** #881: start the subscription in a paused state after creation. */
+  startPaused?: boolean;
 }
 
 interface Props {
@@ -189,6 +191,8 @@ export default function RecurringWizard({ onConfirm }: Props) {
   const [endDate, setEndDate] = useState("");
   const [maxOccurrences, setMaxOccurrences] = useState("");
   const [useMaxOccurrences, setUseMaxOccurrences] = useState(false);
+  // #881: lifecycle option — create the subscription paused.
+  const [startPaused, setStartPaused] = useState(false);
 
   const generatePreviewDates = () => {
     const dates = [];
@@ -217,6 +221,7 @@ export default function RecurringWizard({ onConfirm }: Props) {
     onConfirm({
       enabled: true,
       intervalDays,
+      startPaused,
       ...(useMaxOccurrences && { maxOccurrences: parseInt(maxOccurrences) }),
       ...(!useMaxOccurrences && endDate && { endDate }),
     });
@@ -340,6 +345,23 @@ export default function RecurringWizard({ onConfirm }: Props) {
             useMaxOccurrences={useMaxOccurrences}
             maxOccurrences={maxOccurrences}
           />
+
+          {/* #881: lifecycle option — start paused */}
+          <label className="flex items-start gap-3 cursor-pointer rounded-lg border border-gray-700 bg-gray-900 p-3">
+            <input
+              type="checkbox"
+              checked={startPaused}
+              onChange={(e) => setStartPaused(e.target.checked)}
+              className="w-4 h-4 mt-0.5"
+            />
+            <span className="text-sm">
+              Start paused
+              <span className="block text-xs text-gray-500">
+                Create the subscription in a paused state. You can resume it
+                anytime from the subscriptions dashboard.
+              </span>
+            </span>
+          </label>
         </div>
       )}
 

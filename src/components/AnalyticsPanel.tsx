@@ -6,9 +6,14 @@ import { useI18n } from "@/components/I18nProvider";
 import type { Invoice } from "@stellar-split/sdk";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Skeleton } from "@/components/Skeleton";
+import {
+  aggregateSubscriptionAnalytics,
+  type Subscription,
+} from "@/lib/subscriptions";
 
 interface Props {
   invoices: Invoice[];
+  subscriptions?: Subscription[];
 }
 
 type RangePreset = "7d" | "30d" | "3m" | "custom";
@@ -26,7 +31,7 @@ const RANGE_OPTIONS: RangeOption[] = [
   { key: "custom", label: "Custom", days: null },
 ];
 
-export default function AnalyticsPanel({ invoices }: Props) {
+export default function AnalyticsPanel({ invoices, subscriptions = [] }: Props) {
   const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
   const [range, setRange] = useState<RangePreset>("30d");
@@ -95,6 +100,20 @@ export default function AnalyticsPanel({ invoices }: Props) {
   const chartData = Object.entries(weekData)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([week, count]) => ({ week, invoices: count }));
+
+  // Subscription analytics (scoped to the same date window as invoices).
+  const subscriptionAnalytics = useMemo(
+    () => aggregateSubscriptionAnalytics(subscriptions, from, to),
+    [subscriptions, from, to]
+  );
+
+  const cancellationReasonData = useMemo(
+    () =>
+      Object.entries(subscriptionAnalytics.cancellationReasons)
+        .sort(([, a], [, b]) => b - a)
+        .map(([reason, count]) => ({ reason, count })),
+    [subscriptionAnalytics.cancellationReasons]
+  );
 
   return (
     <div className="bg-gray-900 rounded-xl p-4 sm:p-5 mb-6">
@@ -201,6 +220,77 @@ export default function AnalyticsPanel({ invoices }: Props) {
               <p className="text-xs text-gray-400 mb-1">{t("dashboard.refunded")}</p>
               <p className="text-lg font-semibold text-gray-400">{stats.refunded}</p>
             </div>
+          </div>
+
+          {/* Subscription Analytics */}
+          <div className="space-y-3">
+            <p className="text-sm text-gray-400">{t("dashboard.subscriptions")}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-4">
+                <p className="text-xs text-green-300 mb-1">{t("dashboard.activeSubscriptions")}</p>
+                <p className="text-lg font-semibold text-green-300">
+                  {subscriptionAnalytics.active}
+                </p>
+              </div>
+              <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4">
+                <p className="text-xs text-yellow-300 mb-1">{t("dashboard.pausedSubscriptions")}</p>
+                <p className="text-lg font-semibold text-yellow-300">
+                  {subscriptionAnalytics.paused}
+                </p>
+              </div>
+              <div className="bg-gray-700/50 border border-gray-600 rounded-lg p-4">
+                <p className="text-xs text-gray-400 mb-1">{t("dashboard.cancelledSubscriptions")}</p>
+                <p className="text-lg font-semibold text-gray-400">
+                  {subscriptionAnalytics.cancelled}
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="bg-gray-800 rounded-lg p-4">
+                <p className="text-xs text-gray-400 mb-1">{t("dashboard.mrr")}</p>
+                <p className="text-lg font-semibold">
+                  {formatAmount(subscriptionAnalytics.mrr)}
+                </p>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-4">
+                <p className="text-xs text-gray-400 mb-1">{t("dashboard.churnRate")}</p>
+                <p className="text-lg font-semibold">
+                  {(subscriptionAnalytics.churnRate * 100).toFixed(1)}%
+                </p>
+              </div>
+            </div>
+
+            {cancellationReasonData.length > 0 && (
+              <div className="bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                <p className="text-sm text-gray-400 mb-3">
+                  {t("dashboard.cancellationReasons")}
+                </p>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart
+                    data={cancellationReasonData}
+                    margin={{ top: 20, right: 30, left: 0, bottom: 50 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                    <XAxis
+                      dataKey="reason"
+                      tick={{ fontSize: 12 }}
+                      angle={-45}
+                      textAnchor="end"
+                      height={80}
+                    />
+                    <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#1f2937",
+                        border: "1px solid #374151",
+                        borderRadius: "8px",
+                      }}
+                    />
+                    <Bar dataKey="count" fill="#f59e0b" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </div>
 
           {/* Weekly Chart */}

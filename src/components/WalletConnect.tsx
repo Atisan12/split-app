@@ -7,6 +7,7 @@ import { fetchUsdcBalance } from "@/lib/stellar";
 import QRModal from "@/components/QRModal";
 import WalletErrorModal, { type WalletErrorType } from "@/components/WalletErrorModal";
 import { useToast } from "@/contexts/ToastContext";
+import type { LedgerStatus } from "@/lib/ledger";
 
 interface Props {
   /** Smaller footprint for the sticky header nav: address badge + single connect button, no balance line. */
@@ -21,6 +22,31 @@ function classifyWalletError(e: unknown): WalletErrorType {
   if (msg.includes("network") || msg.includes("passphrase") || msg.includes("mismatch")) return "network_mismatch";
   return "not_installed";
 }
+
+/** Common Stellar derivation paths offered in the Ledger path selector. */
+const LEDGER_DERIVATION_PATHS = [
+  "44'/148'/0'",
+  "44'/148'/1'",
+  "44'/148'/2'",
+] as const;
+
+const LEDGER_STATUS_LABEL: Record<LedgerStatus, string> = {
+  disconnected: "Not connected",
+  connecting: "Connecting…",
+  connected: "Connected",
+  locked: "Device locked",
+  app_not_open: "Open Stellar app",
+  error: "Connection error",
+};
+
+const LEDGER_STATUS_DOT: Record<LedgerStatus, string> = {
+  disconnected: "bg-gray-400",
+  connecting: "bg-amber-400 animate-pulse",
+  connected: "bg-green-500",
+  locked: "bg-amber-500",
+  app_not_open: "bg-amber-500",
+  error: "bg-red-500",
+};
 
 /**
  * WalletConnect — Connect via Freighter or WalletConnect.
@@ -37,6 +63,10 @@ export default function WalletConnect({ compact = false }: Props) {
     freighterInstalled,
     connect,
     disconnect,
+    connectLedger,
+    ledgerStatus,
+    ledgerDerivationPath,
+    setLedgerDerivationPath,
   } = useWalletContext();
   const toast = useToast();
   const [modalError, setModalError] = useState<WalletErrorType>(null);
@@ -44,6 +74,7 @@ export default function WalletConnect({ compact = false }: Props) {
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [qrUri, setQrUri] = useState<string>("");
+  const [ledgerConnecting, setLedgerConnecting] = useState(false);
 
   const USDC_CONTRACT_ID = process.env.NEXT_PUBLIC_USDC_ADDRESS ?? "";
 
@@ -96,6 +127,22 @@ export default function WalletConnect({ compact = false }: Props) {
       // error is surfaced via context state
       toast.error("Could not initiate WalletConnect. Please try again.");
       console.error(e);
+    }
+  };
+
+  const handleConnectLedger = async () => {
+    setLedgerConnecting(true);
+    try {
+      await connectLedger(ledgerDerivationPath);
+    } catch (e) {
+      const errType = classifyWalletError(e);
+      if (errType === "rejected") {
+        toast.error("Signature rejected on Ledger. Try again when you're ready.");
+      } else {
+        setModalError(errType);
+      }
+    } finally {
+      setLedgerConnecting(false);
     }
   };
 
@@ -203,6 +250,43 @@ export default function WalletConnect({ compact = false }: Props) {
         >
           {connecting ? "Connecting…" : "Connect with WalletConnect"}
         </button>
+
+        <button
+          onClick={handleConnectLedger}
+          disabled={connecting || ledgerConnecting}
+          className="min-h-11 px-6 py-3 rounded-lg bg-gray-50 dark:bg-gray-900 hover:bg-gray-100 dark:hover:bg-gray-800 font-semibold transition-colors disabled:opacity-50 border border-gray-200 dark:border-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          aria-label="Connect with Ledger"
+        >
+          {ledgerConnecting ? "Connecting…" : "Connect Ledger"}
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-1.5 w-full sm:w-auto">
+        <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+          <span
+            className={`inline-block h-2 w-2 rounded-full ${LEDGER_STATUS_DOT[ledgerStatus]}`}
+            aria-hidden="true"
+          />
+          <span role="status" aria-live="polite">
+            Ledger: {LEDGER_STATUS_LABEL[ledgerStatus]}
+          </span>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+          <span>Derivation path</span>
+          <select
+            value={ledgerDerivationPath}
+            onChange={(e) => setLedgerDerivationPath(e.target.value)}
+            disabled={ledgerConnecting || ledgerStatus === "connected"}
+            className="min-h-9 rounded-lg bg-gray-100 dark:bg-gray-800 px-2 py-1 text-xs font-mono text-gray-700 dark:text-gray-300 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            aria-label="Ledger derivation path"
+          >
+            {LEDGER_DERIVATION_PATHS.map((path) => (
+              <option key={path} value={path}>
+                m/{path}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {error && <p className="text-red-400 text-xs">Could not connect wallet.</p>}
@@ -219,7 +303,11 @@ export default function WalletConnect({ compact = false }: Props) {
         onDismiss={() => setModalError(null)}
         onRetry={() => {
           setModalError(null);
-          handleConnect();
+          if (walletType === "ledger") {
+            handleConnectLedger();
+          } else {
+            handleConnect();
+          }
         }}
       />
     </div>

@@ -4,7 +4,15 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { splitClient } from "@/lib/stellar";
 
-export type NotificationType = "payment" | "funded" | "released" | "expired" | "reminder";
+export type NotificationType =
+  | "payment"
+  | "funded"
+  | "released"
+  | "expired"
+  | "reminder"
+  | "subscription_billing"
+  | "subscription_paused"
+  | "subscription_cancelled";
 
 export interface AppNotification {
   id: string;
@@ -14,6 +22,25 @@ export interface AppNotification {
   message: string;
   timestamp: number;
   read: boolean;
+  /** Subscription id, present for subscription-related notifications. */
+  subscriptionId?: string;
+}
+
+const SUBSCRIPTION_TYPES: ReadonlySet<NotificationType> = new Set<NotificationType>([
+  "subscription_billing",
+  "subscription_paused",
+  "subscription_cancelled",
+]);
+
+function isSubscriptionNotification(n: AppNotification): boolean {
+  return SUBSCRIPTION_TYPES.has(n.type) || typeof n.subscriptionId === "string";
+}
+
+function notificationHref(n: AppNotification): string {
+  if (isSubscriptionNotification(n) && n.subscriptionId) {
+    return `/subscriptions/${n.subscriptionId}`;
+  }
+  return `/invoice/${n.invoiceId}`;
 }
 
 const STORAGE_KEY = "stellarsplit_notifications_v2";
@@ -71,6 +98,9 @@ const TYPE_ICONS: Record<NotificationType, string> = {
   released: "🚀",
   expired: "⏰",
   reminder: "📅",
+  subscription_billing: "🔁",
+  subscription_paused: "⏸️",
+  subscription_cancelled: "🚫",
 };
 
 export default function NotificationCenter() {
@@ -307,7 +337,7 @@ export default function NotificationCenter() {
               {sorted.map((n, idx) => (
                 <li key={n.id} role="listitem">
                   <Link
-                    href={`/invoice/${n.invoiceId}`}
+                    href={notificationHref(n)}
                     ref={idx === 0 ? firstItemRef : undefined}
                     onClick={() => { markRead(n.id); setOpen(false); }}
                     className={`flex items-start gap-3 w-full px-4 py-3 hover:bg-white/[0.04] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500 ${

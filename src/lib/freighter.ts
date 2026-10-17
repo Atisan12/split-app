@@ -10,9 +10,12 @@ export const NETWORK_PASSPHRASE =
     ? "Public Global Stellar Network ; September 2015"
     : "Test SDF Network ; September 2015";
 
-export type WalletType = "freighter" | "walletconnect";
+export type WalletType = "freighter" | "walletconnect" | "ledger";
 
 let walletConnectKit: WalletConnectKit | null = null;
+
+/** Cached Ledger public key once a device has been connected. */
+let ledgerPublicKey: string | null = null;
 
 /** Initialize WalletConnect kit */
 async function initWalletConnectKit() {
@@ -82,6 +85,50 @@ export async function signWithWalletConnect(xdr: string): Promise<string> {
   return (kit as any).signTransaction(xdr, NETWORK_PASSPHRASE);
 }
 
+/** Connect a Ledger hardware wallet and return the user's public key. */
+export async function connectLedger(): Promise<string> {
+  if (typeof window === "undefined") throw new Error("Browser only");
+  const { connectLedger: connect } = await import("@/lib/ledger");
+  const publicKey = await connect();
+  ledgerPublicKey = publicKey;
+  return publicKey;
+}
+
+/** Get the connected Ledger public key without prompting. */
+export async function getLedgerPublicKey(): Promise<string | null> {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const { getLedgerPublicKey: getKey } = await import("@/lib/ledger");
+    const key = await getKey();
+    ledgerPublicKey = key;
+    return key;
+  } catch {
+    return ledgerPublicKey;
+  }
+}
+
+/** Sign a transaction XDR with a Ledger hardware wallet. */
+export async function signWithLedger(xdr: string): Promise<string> {
+  if (typeof window === "undefined") throw new Error("Browser only");
+  const { signWithLedger: sign } = await import("@/lib/ledger");
+  return sign(xdr, NETWORK_PASSPHRASE);
+}
+
+/** Disconnect the Ledger hardware wallet. */
+export async function disconnectLedger(): Promise<void> {
+  if (typeof window === "undefined") throw new Error("Browser only");
+
+  try {
+    const { disconnectLedger: disconnect } = await import("@/lib/ledger");
+    await disconnect();
+  } catch {
+    // Ignore errors on disconnect
+  } finally {
+    ledgerPublicKey = null;
+  }
+}
+
 /** Disconnect WalletConnect. */
 export async function disconnectWalletConnect(): Promise<void> {
   if (typeof window === "undefined") throw new Error("Browser only");
@@ -99,6 +146,10 @@ export async function disconnectWalletConnect(): Promise<void> {
 export async function isWalletConnected(): Promise<boolean> {
   if (typeof window === "undefined") return false;
   try {
+    const ledgerKey = await getLedgerPublicKey();
+    if (ledgerKey) return true;
+  } catch { /* fall through */ }
+  try {
     const wcKey = await getWalletConnectPublicKey();
     if (wcKey) return true;
   } catch { /* fall through */ }
@@ -113,6 +164,16 @@ export async function isWalletConnected(): Promise<boolean> {
 /** Sign a transaction with the currently connected wallet adapter. */
 export async function signTransaction(xdr: string): Promise<string> {
   if (typeof window === "undefined") throw new Error("Browser only");
+
+  // Prefer Ledger if a device is the active wallet
+  try {
+    const ledgerKey = await getLedgerPublicKey();
+    if (ledgerKey) {
+      return signWithLedger(xdr);
+    }
+  } catch {
+    // Ledger not available, try WalletConnect
+  }
 
   // Try WalletConnect first if available
   try {
