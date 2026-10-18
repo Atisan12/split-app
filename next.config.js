@@ -8,6 +8,9 @@ const withPWA = require('@ducanh2912/next-pwa').default({
 });
 
 const nextConfig = {
+  // Gzip/Brotli-compress all server responses (HTML, JSON API payloads, etc.)
+  // to cut payload size for slower / mobile connections.
+  compress: true,
   experimental: {
     serverComponentsExternalPackages: ['@stellar/stellar-sdk', '@vercel/blob'],
   },
@@ -49,6 +52,29 @@ const nextConfig = {
         source: '/embed/:id',
         headers: [
           { key: 'X-Frame-Options', value: 'ALLOWALL' },
+        ],
+      },
+      {
+        // Next.js fingerprints build assets with content hashes, so they're
+        // safe to cache aggressively and immutably on the client/CDN.
+        source: "/_next/static/:path*",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+        ],
+      },
+      {
+        // Fingerprinted static files under /public (images, fonts, icons).
+        source: "/:path*.(svg|jpg|jpeg|png|webp|avif|gif|ico|woff|woff2|ttf|otf)",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+        ],
+      },
+      {
+        // JSON API responses: allow short-lived shared caching + revalidation
+        // instead of forcing every client to refetch from origin.
+        source: "/api/:path*",
+        headers: [
+          { key: "Cache-Control", value: "private, max-age=0, must-revalidate" },
         ],
       },
     ];
