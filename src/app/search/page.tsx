@@ -80,6 +80,15 @@ function hasActiveFilters(c: FilterCriteria): boolean {
   });
 }
 
+/** Counts how many individual filter dimensions are currently active (for a filter-count badge). */
+function countActiveFilters(c: FilterCriteria): number {
+  return Object.keys(c).reduce((count, k) => {
+    const v = (c as unknown as Record<string, unknown>)[k];
+    const active = Array.isArray(v) ? v.length > 0 : v !== undefined;
+    return active ? count + 1 : count;
+  }, 0);
+}
+
 // ── Status badge styles ───────────────────────────────────────────────────────
 
 const STATUS_STYLES: Record<string, string> = {
@@ -87,6 +96,60 @@ const STATUS_STYLES: Record<string, string> = {
   Released: 'bg-green-500/20 text-green-300',
   Refunded: 'bg-gray-500/20 text-gray-300',
 };
+
+// ── Highlight ───────────────────────────────────────────────────────────────
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Wraps occurrences of `query` inside `text` with a highlight <mark>. */
+function highlightMatch(text: string, query: string): React.ReactNode {
+  const trimmed = query.trim();
+  if (!trimmed) return text;
+  const escaped = escapeRegExp(trimmed);
+  const parts = text.split(new RegExp(`(${escaped})`, 'ig'));
+  if (parts.length === 1) return text;
+  return parts.map((part, i) =>
+    part.toLowerCase() === trimmed.toLowerCase() ? (
+      <mark key={i} className="bg-indigo-500/40 text-indigo-100 rounded px-0.5">
+        {part}
+      </mark>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+}
+
+// ── Smart suggestions ─────────────────────────────────────────────────────────
+
+/** Builds lightweight "did you mean" style suggestions from history + common terms. */
+function buildSmartSuggestions(
+  query: string,
+  recentSearches: string[],
+  savedSearches: SavedSearch[],
+): string[] {
+  const trimmed = query.trim().toLowerCase();
+  if (!trimmed) return [];
+  const pool = [
+    ...recentSearches,
+    ...savedSearches.map((s) => s.query),
+    ...STATUSES,
+    ...DEFAULT_TOKENS,
+  ];
+  const seen = new Set<string>();
+  const suggestions: string[] = [];
+  for (const candidate of pool) {
+    const c = candidate.trim();
+    if (!c || c.toLowerCase() === trimmed) continue;
+    if (c.toLowerCase().includes(trimmed) && !seen.has(c.toLowerCase())) {
+      seen.add(c.toLowerCase());
+      suggestions.push(c);
+    }
+    if (suggestions.length >= 5) break;
+  }
+  return suggestions;
+}
 
 // ── FullTextSearchBar ─────────────────────────────────────────────────────────
 
@@ -356,9 +419,11 @@ function ColumnPicker({
 function InvoiceRow({
   invoice,
   visibleColumns,
+  highlightQuery,
 }: {
   invoice: Invoice;
   visibleColumns: SearchColumn[];
+  highlightQuery?: string;
 }) {
   const total = invoice.recipients.reduce((s, r) => s + r.amount, 0n);
   const fundedPct = total > 0n ? Number((invoice.funded * 100n) / total) : 0;
@@ -367,7 +432,7 @@ function InvoiceRow({
     <div className="bg-gray-900 rounded-xl p-4 hover:bg-gray-800 transition-colors cursor-pointer">
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-sm font-semibold text-gray-300 shrink-0">
-          Invoice #{invoice.id}
+          Invoice #{highlightQuery ? highlightMatch(String(invoice.id), highlightQuery) : invoice.id}
         </span>
 
         {visibleColumns.includes('amount') && (
@@ -380,7 +445,7 @@ function InvoiceRow({
           <span
             className={`text-xs px-2 py-0.5 rounded-full font-semibold ${STATUS_STYLES[invoice.status] ?? ''}`}
           >
-            {invoice.status}
+            {highlightQuery ? highlightMatch(invoice.status, highlightQuery) : invoice.status}
           </span>
         )}
 
@@ -392,7 +457,9 @@ function InvoiceRow({
 
         {visibleColumns.includes('creator') && (
           <span className="text-xs text-gray-500 font-mono">
-            {truncateAddress(invoice.creator)}
+            {highlightQuery
+              ? highlightMatch(truncateAddress(invoice.creator), highlightQuery)
+              : truncateAddress(invoice.creator)}
           </span>
         )}
 
@@ -417,9 +484,10 @@ function InvoiceRow({
 interface VirtualListProps {
   items: Invoice[];
   visibleColumns: SearchColumn[];
+  highlightQuery?: string;
 }
 
-function VirtualList({ items, visibleColumns }: VirtualListProps) {
+function VirtualList({ items, visibleColumns, highlightQuery }: VirtualListProps) {
   const [scrollTop, setScrollTop] = useState(0);
 
   const startIdx = Math.floor(scrollTop / ITEM_HEIGHT_PX);
@@ -444,7 +512,7 @@ function VirtualList({ items, visibleColumns }: VirtualListProps) {
             className="mb-4"
           >
             <Link href={`/invoice/${inv.id}`}>
-              <InvoiceRow invoice={inv} visibleColumns={visibleColumns} />
+              <InvoiceRow invoice={inv} visibleColumns={visibleColumns} highlightQuery={highlightQuery} />
             </Link>
           </div>
         ))}
@@ -829,6 +897,15 @@ function SearchPageInner() {
             <span>{shareStatus || 'Share search'}</span>
           </button>
           <ColumnPicker visibleColumns={visibleColumns} onToggle={handleToggleColumn} />
+          {countActiveFilters(criteria) > 0 && (
+            <span
+              className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-semibold"
+              data-testid="active-filter-count"
+              title="Number of active filter dimensions"
+            >
+              {countActiveFilters(criteria)} filter{countActiveFilters(criteria) !== 1 ? 's' : ''}
+            </span>
+          )}
           {filtersActive && (
             <button
               type="button"
@@ -855,6 +932,29 @@ function SearchPageInner() {
           onFocus={() => setShowHistory(true)}
           inputRef={fullTextInputRef}
         />
+        {fullTextQuery.trim() && !showHistory && (
+          (() => {
+            const suggestions = buildSmartSuggestions(fullTextQuery, recentSearches, savedSearches);
+            if (suggestions.length === 0) return null;
+            return (
+              <div
+                className="absolute top-full left-0 right-0 mt-1 z-20 bg-gray-900 border border-gray-700 rounded-lg p-2 flex flex-wrap gap-2"
+                data-testid="smart-suggestions"
+              >
+                {suggestions.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setFullTextQuery(s)}
+                    className="text-xs px-2 py-1 rounded-full bg-gray-800 text-indigo-300 hover:bg-gray-700 transition-colors"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            );
+          })()
+        )}
         {showHistory && (
           <div className="absolute top-full left-0 right-0 mt-1 z-30">
             <SearchHistoryPanel
@@ -1148,7 +1248,7 @@ function SearchPageInner() {
       ) : results.length === 0 ? (
         <EmptyState hasInvoices={allInvoices.length > 0} hasFilters={filtersActive} />
       ) : (
-        <VirtualList items={results} visibleColumns={visibleColumns} />
+        <VirtualList items={results} visibleColumns={visibleColumns} highlightQuery={fullTextQuery} />
       )}
     </main>
   );
