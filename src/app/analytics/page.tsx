@@ -119,6 +119,7 @@ export default function AnalyticsPage() {
   const [error, setError] = useState<string | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [drilldownStatus, setDrilldownStatus] = useState<string | null>(null);
 
   useEffect(() => {
     getFreighterPublicKey()
@@ -164,6 +165,23 @@ export default function AnalyticsPage() {
       return true;
     });
   }, [invoices, dateFrom, dateTo]);
+
+  const drilldownInvoices = useMemo(() => {
+    if (!drilldownStatus) return [];
+    const now = Date.now() / 1000;
+    switch (drilldownStatus) {
+      case "Released":
+        return filtered.filter((i) => i.status === "Released");
+      case "Refunded":
+        return filtered.filter((i) => i.status === "Refunded");
+      case "Active":
+        return filtered.filter((i) => i.status === "Pending" && i.deadline >= now);
+      case "Expired":
+        return filtered.filter((i) => i.status === "Pending" && i.deadline < now);
+      default:
+        return [];
+    }
+  }, [filtered, drilldownStatus]);
 
   const stats = useMemo(() => {
     const total = filtered.length;
@@ -435,10 +453,50 @@ export default function AnalyticsPage() {
               Invoice Status Breakdown
             </h2>
             <Suspense fallback={<ChartFallback />}>
-              <DynamicStatusPieChart data={stats.statusData} />
+              <DynamicStatusPieChart
+                data={stats.statusData}
+                onSliceClick={(name) => setDrilldownStatus(name)}
+              />
             </Suspense>
+            <p className="text-xs text-gray-500 mt-2">
+              Click a slice to drill into those invoices.
+            </p>
           </div>
         </div>
+
+        {drilldownStatus && (
+          <div
+            className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-8"
+            data-testid="status-drilldown-panel"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+                {drilldownStatus} invoices ({drilldownInvoices.length})
+              </h2>
+              <button
+                type="button"
+                onClick={() => setDrilldownStatus(null)}
+                className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+              >
+                Clear
+              </button>
+            </div>
+            {drilldownInvoices.length === 0 ? (
+              <p className="text-sm text-gray-500">No invoices in this category.</p>
+            ) : (
+              <ul className="divide-y divide-gray-800">
+                {drilldownInvoices.slice(0, 50).map((inv) => (
+                  <li key={inv.id} className="py-2 flex items-center justify-between text-sm">
+                    <span className="text-gray-300">Invoice #{inv.id}</span>
+                    <span className="text-gray-500">
+                      {stroopsToUsdc(inv.funded).toFixed(2)} USDC
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
           <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
