@@ -19,45 +19,7 @@ import { useI18n } from "@/components/I18nProvider";
 import DeadlineSuggester from "@/components/DeadlineSuggester";
 import { validateDeadline } from "@/components/DuplicateModal";
 import { decodeTemplate } from "@/lib/templateSharing";
-import type { ImportedTxData } from "@/lib/txImport";
-import {
-  generateRetroactiveInvoiceId,
-  saveRetroactiveInvoice,
-  type RetroactiveInvoice,
-} from "@/lib/retroactiveInvoices";
-import { useOfflineDraftAutosave } from "@/hooks/useOfflineDraftAutosave";
-import {
-  getOrCreateLocalUserId,
-  listDraftsForUser,
-  type DraftFormData,
-  type StoredDraft,
-} from "@/lib/offlineDraftDB";
-import SplitCalculator from "@/components/SplitCalculator";
-import TagInput from "@/components/invoice/TagInput";
-import { useInvoiceTags } from "@/hooks/useInvoiceTags";
-import {
-  calculateSplit,
-  type SplitMeta,
-} from "@/hooks/useSplitCalculator";
-
-import InstallmentPlanBuilder, { type InstallmentMilestone as PlanMilestone } from "@/components/invoice/InstallmentPlanBuilder";
-import CoSignerSection from "@/components/invoice/CoSignerSection";
-import AmountDenominationInput from "@/components/AmountDenominationInput";
-import { useXlmUsdcRate } from "@/hooks/useXlmUsdcRate";
-import {
-  WIZARD_STEPS,
-  REVIEW_STEP,
-  FIELD_HELP,
-  validateWizardStep,
-  firstInvalidStep,
-  type WizardState,
-} from "@/lib/invoiceWizard";
-
-import { useInvoiceCollaboration } from "@/hooks/useInvoiceCollaboration";
-import CursorOverlay from "@/components/CursorOverlay";
-import PresencePill from "@/components/PresencePill";
-import ReconnectionBanner from "@/components/ReconnectionBanner";
-
+import DraftCollaborationPanel from "@/components/DraftCollaborationPanel";
 
 const RecipientForm = dynamic(() => import("@/components/RecipientForm"), { ssr: false });
 const TemplateManager = dynamic(() => import("@/components/TemplateManager"), { ssr: false });
@@ -166,6 +128,8 @@ function NewInvoiceForm() {
 
   const fromId = searchParams.get("from");
   const deadlineParam = searchParams.get("deadline");
+  const draftId =
+    searchParams.get("draft") ?? fromId ?? "new-invoice-draft";
   const [cloneSourceId, setCloneSourceId] = useState<string | null>(null);
   const [originalToken, setOriginalToken] = useState<string | null>(null);
   const [originalRecipients, setOriginalRecipients] = useState<RecipientRow[] | null>(null);
@@ -1392,84 +1356,8 @@ function NewInvoiceForm() {
         )}
       </div>
 
-      {recoveredDraft && (
-        <DraftRecoveryBanner
-          updatedAt={recoveredDraft.updatedAt}
-          onRestore={handleRestoreDraft}
-          onDiscard={handleDiscardDraft}
-        />
-      )}
+      <DraftCollaborationPanel draftId={draftId} />
 
-      {cloneSourceId && (
-        <CloneBanner sourceId={cloneSourceId} />
-      )}
-
-      {!cloneSourceId && (
-        <div className="flex gap-1 border-b border-gray-700 mb-8" role="tablist" aria-label="Invoice creation mode">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={formMode === "create"}
-            onClick={() => setFormMode("create")}
-            className={`px-4 py-2 text-sm font-medium transition-colors rounded-t-lg -mb-px border-b-2 ${
-              formMode === "create"
-                ? "border-indigo-500 text-indigo-600 dark:text-indigo-300"
-                : "border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
-            }`}
-          >
-            Create New
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={formMode === "import"}
-            onClick={() => setFormMode("import")}
-            className={`px-4 py-2 text-sm font-medium transition-colors rounded-t-lg -mb-px border-b-2 ${
-              formMode === "import"
-                ? "border-indigo-500 text-indigo-600 dark:text-indigo-300"
-                : "border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
-            }`}
-          >
-            Import from Transaction
-          </button>
-        </div>
-      )}
-
-      {formMode === "import" && !cloneSourceId ? (
-        <div className="flex flex-col gap-6">
-          <TxImportPanel onImported={handleImported} />
-
-          {importedTx && (
-            <div className="flex flex-col gap-4 rounded-lg bg-indigo-950/40 border border-indigo-800 px-4 py-4">
-              <p className="text-sm text-indigo-200">
-                This invoice will be created as <strong>retroactive</strong> and marked{" "}
-                <strong>Fully Paid</strong> automatically — no on-chain payment is required.
-              </p>
-              {retroError && (
-                <p role="alert" className="text-red-400 text-sm">{retroError}</p>
-              )}
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={handleRetroactiveSubmit}
-                  disabled={retroSubmitting}
-                  className="min-h-11 px-6 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition-colors disabled:opacity-50"
-                >
-                  {retroSubmitting ? "Creating…" : "Create Retroactive Invoice"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setImportedTx(null)}
-                  className="min-h-11 px-6 py-3 rounded-lg bg-gray-700 hover:bg-gray-600 font-medium transition-colors"
-                >
-                  Start Over
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      ) : (
-      <>
       {/* Cloned-from banner */}
       {cloneSourceId && (
         <div className="mb-6 flex items-center gap-2 text-sm bg-indigo-950/60 border border-indigo-700 text-indigo-300 rounded-lg px-3 py-2">
