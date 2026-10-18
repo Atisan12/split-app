@@ -15,7 +15,7 @@ import CommandPalette from "@/components/CommandPalette";
 import { SessionLockProvider } from "@/contexts/SessionLockContext";
 import { ToastProvider } from "@/contexts/ToastContext";
 import InstallBanner from "@/components/InstallBanner";
-import ToastContainer from "@/components/ToastContainer";
+import SkipNavLink from "@/components/SkipNavLink";
 import QueryProvider from "@/contexts/QueryProvider";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { UserPreferencesProvider } from "@/context/UserPreferencesContext";
@@ -125,52 +125,33 @@ export default function RootLayout({
         <QueryProvider>
           <ThemeProvider>
             <AccessibilityProvider>
-
-              <WalletProvider>
-                <I18nProvider>
-                  <SessionLockProvider>
-                    <ToastProvider>
-                      <UserPreferencesProvider>
-                        <FiatRateProvider>
-                          <ShortcutRegistryProvider>
-                            <WebVitalsReporter />
-                            <Navbar />
-                            <SimulationBanner />
-                            <UpgradeBanner />
-                            <OfflineBanner />
-                            <WalletSecurityCenter />
-                            <TransitionProvider>
-                              <ErrorBoundary>{children}</ErrorBoundary>
-                            </TransitionProvider>
-                            <footer className="border-t border-gray-200 dark:border-gray-800 mt-16 py-6 px-4 sm:px-6">
-                              <div className="max-w-7x mx-auto flex flex-wrap items-center justify-between gap-4">
-                                <p className="text-xs text-gray-500">
-                                  © {new Date().getFullYear()} StellarSplit
-                                </p>
-                                <div className="flex flex-wrap items-center gap-4">
-                                  <a
-                                    href="/docs/user-guide"
-                                    className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
-                                  >
-                                    Help &amp; User Guide
-                                  </a>
-                                  <LanguageSwitcher />
-                                </div>
-                              </div>
-                            </footer>
-                            <CommandPalette />
-                            <OnboardingFlow />
-                            <RecipientOnboarding />
-                            <InstallBanner />
-                            <ToastContainer />
-                          </ShortcutRegistryProvider>
-                        </FiatRateProvider>
-                      </UserPreferencesProvider>
-                    </ToastProvider>
-                  </SessionLockProvider>
-                </I18nProvider>
-              </WalletProvider>
-
+              <I18nProvider>
+                <SessionLockProvider>
+                  <ToastProvider>
+                    <SkipNavLink />
+                    <Navbar />
+                    <SimulationBanner />
+                    <UpgradeBanner />
+                    <ErrorBoundary>
+                      <main id="main-content" tabIndex={-1}>
+                        {children}
+                      </main>
+                    </ErrorBoundary>
+                    <footer className="border-t border-gray-200 dark:border-gray-800 mt-16 py-6 px-4 sm:px-6">
+                      <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+                        <p className="text-xs text-gray-500">
+                          © {new Date().getFullYear()} StellarSplit
+                        </p>
+                        <LanguageSwitcher />
+                      </div>
+                    </footer>
+                    <CommandPalette />
+                    <OnboardingFlow />
+                    <RecipientOnboarding />
+                    <InstallBanner />
+                  </ToastProvider>
+                </SessionLockProvider>
+              </I18nProvider>
             </AccessibilityProvider>
           </ThemeProvider>
         </QueryProvider>
