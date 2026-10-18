@@ -362,6 +362,14 @@ export default function DashboardClient() {
     return result;
   }, [invoices, presetFilters, selectedStatuses, dateFrom, dateTo, sort, tag, tagsByInvoice, splitMetaMap]);
 
+  // Rebuilding this object inline on every render would give InvoiceTable a
+  // new `displayNumbers` reference each time, defeating any memoization
+  // inside it even when the underlying list hasn't changed.
+  const tableDisplayNumbers = useMemo(
+    () => Object.fromEntries(visibleInvoices.map((inv) => [inv.id, getOrAssignDisplayNumber(inv.id)])),
+    [visibleInvoices],
+  );
+
   const { totalActive, totalValueLocked, totalReleased } = useMemo(() => {
     const now = Math.floor(Date.now() / 1000);
     let tvl = 0n,
@@ -413,7 +421,10 @@ export default function DashboardClient() {
     setBulkReminderResults(null);
   };
 
-  const toggleCompareSelect = (id: string) => {
+  // Stable reference so memoized InvoiceCards in compare mode don't all
+  // re-render just because this handler would otherwise be a fresh closure
+  // on every DashboardClient render.
+  const toggleCompareSelect = useCallback((id: string) => {
     setCompareSelected((prev) => {
       if (prev.size >= 2 && !prev.has(id)) {
         return prev; // Max 2 invoices
@@ -423,7 +434,7 @@ export default function DashboardClient() {
       else next.add(id);
       return next;
     });
-  };
+  }, []);
 
   const exitCompareMode = () => {
     setCompareMode(false);
@@ -914,9 +925,7 @@ export default function DashboardClient() {
         viewMode === "table" && !multiSelect && !reminderSelect && !compareMode ? (
           <InvoiceTable
             invoices={visibleInvoices}
-            displayNumbers={Object.fromEntries(
-              visibleInvoices.map((inv) => [inv.id, getOrAssignDisplayNumber(inv.id)])
-            )}
+            displayNumbers={tableDisplayNumbers}
             tagsByInvoice={tagsByInvoice}
             rowAction={(inv) => (
               <Link
@@ -1055,7 +1064,7 @@ export default function DashboardClient() {
                       tags={tagsByInvoice[inv.id] ?? []}
                       isComparing={compareMode}
                       isChecked={isCompareSelected}
-                      onCompareToggle={(invoiceId) => toggleCompareSelect(invoiceId)}
+                      onCompareToggle={toggleCompareSelect}
                     />
                   </div>
                 ) : (
