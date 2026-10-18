@@ -53,6 +53,48 @@ The initial audit surfaced the following categories of critical/serious violatio
 - **Browser coverage locally vs. CI.** A fresh dev sandbox may only have the Chromium Playwright browser installed. CI installs Chromium, Firefox, and WebKit via `npx playwright install --with-deps`, so the merge gate is multi-engine even when a local run (`npx playwright test --grep @a11y`) only exercises Chromium.
 - **Moderate/minor axe findings are not gated on.** Only `critical`/`serious` impact violations fail the build, per the acceptance criteria. Any moderate/minor findings surfaced by axe during a run are not currently tracked separately.
 
+## Component-level automated testing
+
+In addition to the page-level Playwright + `@axe-core/playwright` gate
+above, `src/__tests__/a11y/componentA11y.test.tsx` runs `axe-core` directly
+against individual components rendered under jsdom (via Vitest). This is
+faster to run locally (`npm test -- a11y`) and isolates violations to a
+single component rather than a whole page, which is useful for catching
+ARIA/labelling regressions in shared primitives (e.g. `StatusBadge`,
+`Skeleton`) before they ripple into every page that uses them.
+
+## Manual review process
+
+Automated tooling (axe-core) catches a large share of WCAG violations but
+not all of them — contrast on dynamically-rendered custom canvases,
+meaningful reading order, and genuine screen-reader usability all need a
+human pass. The manual review checklist below should be run once per
+release cycle and whenever a new page/flow is added to the audit scope:
+
+1. **Screen reader pass** — navigate each audited route (see Scope above)
+   with VoiceOver (macOS/iOS) or NVDA (Windows), confirm:
+   - Page title and heading structure are announced sensibly on load.
+   - Every interactive element (buttons, links, form fields) has an
+     announced name that matches its visible label or purpose.
+   - Dynamic updates (toasts, status changes, form errors) are announced
+     via `aria-live`/`role="status"`/`role="alert"` rather than silently
+     appearing.
+2. **Keyboard navigation pass** — unplug the mouse and confirm every
+   interactive control is reachable via `Tab`/`Shift+Tab`, has a visible
+   focus indicator, and can be activated with `Enter`/`Space`. Confirm
+   focus order matches visual/reading order and that no keyboard trap
+   exists (a modal's `Escape` always closes it and returns focus to the
+   trigger).
+3. **Color contrast spot-check** — for any new custom-colored UI (badges,
+   charts, illustrations) not already covered by the automated gate, check
+   contrast with a tool such as the browser DevTools contrast checker
+   against the 4.5:1 (normal text) / 3:1 (large text, 18px+ bold or 24px+)
+   thresholds.
+4. **Document findings** — file an issue (or a checklist comment on the PR)
+   for anything found, tag it `a11y`, and link it from this document's
+   "Known limitations" section until fixed. Once fixed, add a short note to
+   the "What was fixed" section above so the audit trail stays complete.
+
 ## Extending the audit
 
 To add a new page to the gate, add an entry to the `PAGES` array in `e2e/a11y.spec.ts` — the shared `runAxe()` helper and assertion are reused automatically. For flows that require user interaction (opening a modal, completing a multi-step form), follow the pattern in the two targeted tests at the bottom of that file: drive the interaction with Playwright, then call `runAxe(page)` and assert on `critical`/`serious` violations.
