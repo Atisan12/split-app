@@ -149,19 +149,19 @@ export default function ExportModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+        <div className="sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex justify-between items-center">
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">Export Invoices</h2>
-            <p className="text-sm text-gray-600 mt-1">
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Export Invoices</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
               {invoices.length} invoice{invoices.length !== 1 ? 's' : ''} available
             </p>
           </div>
           <button
             onClick={onClose}
             disabled={isExporting}
-            className="text-gray-400 hover:text-gray-600 focus:outline-none disabled:opacity-50"
+            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 focus:outline-none disabled:opacity-50"
           >
             <svg
               className="w-6 h-6"
@@ -189,14 +189,14 @@ export default function ExportModal({
 
           {/* Date Range */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Date Range
             </label>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label
                   htmlFor="export-from"
-                  className="block text-xs text-gray-500 mb-1"
+                  className="block text-xs text-gray-500 dark:text-gray-400 mb-1"
                 >
                   From
                 </label>
@@ -211,13 +211,13 @@ export default function ExportModal({
                   disabled={isExporting}
                   aria-describedby={dateRangeError ? 'export-date-error' : undefined}
                   aria-invalid={!!dateRangeError}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 dark:disabled:bg-gray-700"
                 />
               </div>
               <div>
                 <label
                   htmlFor="export-to"
-                  className="block text-xs text-gray-500 mb-1"
+                  className="block text-xs text-gray-500 dark:text-gray-400 mb-1"
                 >
                   To
                 </label>
@@ -232,7 +232,7 @@ export default function ExportModal({
                   disabled={isExporting}
                   aria-describedby={dateRangeError ? 'export-date-error' : undefined}
                   aria-invalid={!!dateRangeError}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 dark:disabled:bg-gray-700"
                 />
               </div>
             </div>
@@ -249,7 +249,7 @@ export default function ExportModal({
 
           {/* Status Filter */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Status
             </label>
             <div className="space-y-2">
@@ -260,9 +260,9 @@ export default function ExportModal({
                     checked={selectedStatuses.includes(status)}
                     onChange={() => handleStatusChange(status)}
                     disabled={isExporting}
-                    className="w-4 h-4 border-gray-300 rounded focus:ring-indigo-500 disabled:opacity-50"
+                    className="w-4 h-4 border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded focus:ring-indigo-500 disabled:opacity-50"
                   />
-                  <span className="ml-2 text-sm text-gray-700">{status}</span>
+                  <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{status}</span>
                 </label>
               ))}
             </div>
@@ -270,7 +270,7 @@ export default function ExportModal({
 
           {/* Asset Filter */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Assets
             </label>
             <div className="space-y-2">
@@ -281,9 +281,9 @@ export default function ExportModal({
                     checked={selectedAssets.includes(asset)}
                     onChange={() => handleAssetChange(asset)}
                     disabled={isExporting}
-                    className="w-4 h-4 border-gray-300 rounded focus:ring-indigo-500 disabled:opacity-50"
+                    className="w-4 h-4 border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded focus:ring-indigo-500 disabled:opacity-50"
                   />
-                  <span className="ml-2 text-sm text-gray-700">{asset}</span>
+                  <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{asset}</span>
                 </label>
               ))}
             </div>
@@ -291,11 +291,11 @@ export default function ExportModal({
         </div>
 
         {/* Footer */}
-        <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-4">
+        <div className="sticky bottom-0 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-6 py-4 flex justify-end gap-4">
           <button
             onClick={onClose}
             disabled={isExporting}
-            className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-4 py-2 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Cancel
           </button>
