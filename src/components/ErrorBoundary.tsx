@@ -4,6 +4,7 @@ import { Component, type ReactNode } from "react";
 import Link from "next/link";
 import WalletConnect from "@/components/WalletConnect";
 import { classifyError } from "@/lib/errors";
+import { getWalletAddress, hashWalletAddress } from "@/lib/errorTracking";
 
 interface Props {
   children: ReactNode;
@@ -29,8 +30,27 @@ export default class ErrorBoundary extends Component<Props, State> {
       // Sentry is only initialised when NEXT_PUBLIC_SENTRY_DSN is set.
       // Dynamic import keeps it out of the production bundle when unconfigured.
       const Sentry = await import("@sentry/nextjs");
-      const eventId = Sentry.captureException(error);
-      this.setState({ sentryEventId: eventId });
+      const { kind } = classifyError(error);
+
+      Sentry.withScope((scope) => {
+        // Stable grouping: fingerprint by error kind so identical failure
+        // classes are grouped together regardless of message/stack variance.
+        scope.setFingerprint(["error-boundary", kind]);
+        scope.setTag("error.kind", kind);
+        scope.setTag("error.boundary", "root");
+
+        if (typeof window !== "undefined") {
+          scope.setTag("route.pathname", window.location.pathname);
+        }
+
+        const walletAddress = getWalletAddress();
+        if (walletAddress) {
+          scope.setTag("wallet.address_hash", hashWalletAddress(walletAddress));
+        }
+
+        const eventId = Sentry.captureException(error);
+        this.setState({ sentryEventId: eventId });
+      });
     } catch {
       // Sentry unavailable — continue without it
     }

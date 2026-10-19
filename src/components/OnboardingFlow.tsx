@@ -319,6 +319,15 @@ export default function OnboardingFlow() {
                 <li className="flex items-center gap-2"><span className="text-brand-400">✦</span> Track payments in real time with on-chain proof</li>
                 <li className="flex items-center gap-2"><span className="text-brand-400">✦</span> Export receipts and share QR codes</li>
               </ul>
+              <a
+                href="/docs/user-guide/getting-started.md"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Read the getting started guide (opens in a new tab)"
+                className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-brand-300 hover:text-brand-200 underline"
+              >
+                Read the getting started guide →
+              </a>
             </div>
           )}
 
@@ -364,17 +373,36 @@ export default function OnboardingFlow() {
           )}
 
           {step === 5 && (
-            <div className="mt-2">
+            <div className="mt-2 flex flex-col gap-3">
               <OnboardingChecklist
                 completed={checklistDone}
                 onToggle={handleToggleChecklist}
               />
+              <a
+                href="/docs/user-guide/getting-started.md"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="View the full user guide (opens in a new tab)"
+                className="self-center text-xs font-semibold text-brand-400 hover:text-brand-300 underline"
+              >
+                View full guide →
+              </a>
             </div>
           )}
         </div>
 
         {/* Footer actions */}
-        <div className="px-6 pb-6 flex gap-3">
+        <div className="px-6 pb-6 flex flex-col gap-3">
+          <a
+            href="/docs/user-guide/getting-started.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="View full user guide (opens in a new tab)"
+            className="self-center text-xs text-slate-400 hover:text-slate-300 underline transition-colors"
+          >
+            View full guide →
+          </a>
+          <div className="flex gap-3">
           {step > 1 && (
             <button
               onClick={handleBack}
@@ -389,6 +417,7 @@ export default function OnboardingFlow() {
           >
             {step === TOTAL_STEPS ? "Get started" : "Next"}
           </button>
+          </div>
         </div>
       </div>
     </div>

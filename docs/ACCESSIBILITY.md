@@ -53,6 +53,31 @@ The initial audit surfaced the following categories of critical/serious violatio
 - **Browser coverage locally vs. CI.** A fresh dev sandbox may only have the Chromium Playwright browser installed. CI installs Chromium, Firefox, and WebKit via `npx playwright install --with-deps`, so the merge gate is multi-engine even when a local run (`npx playwright test --grep @a11y`) only exercises Chromium.
 - **Moderate/minor axe findings are not gated on.** Only `critical`/`serious` impact violations fail the build, per the acceptance criteria. Any moderate/minor findings surfaced by axe during a run are not currently tracked separately.
 
+## Breadcrumbs and contextual help
+
+The breadcrumb navigation (`src/components/Breadcrumbs.tsx`) and contextual help system (`src/components/HelpTooltip.tsx`) are covered by the same axe gate and have an explicit accessibility contract:
+
+### Breadcrumbs
+
+- Rendered as a `<nav aria-label="Breadcrumb">` landmark so screen readers can jump to it.
+- The trail is an ordered list (`<ol>`); each crumb is an `<li>`.
+- The current page is marked with `aria-current="page"` on its link/text and is not itself a link target.
+- Separators are decorative (`aria-hidden="true"`) so they are not announced.
+- Every crumb is a real focusable link (or plain text for the current page) reachable in DOM order via Tab.
+
+### Contextual help (`HelpTooltip`)
+
+- The trigger is a `<button type="button">` with an accessible name (`aria-label`, e.g. "Help: Invoice status") — never an icon-only element without a label.
+- The help text is associated with the trigger via `aria-describedby` pointing at the tooltip content element, so the description is announced when the trigger receives focus.
+- The tooltip opens on focus **and** hover, and closes on `Escape` and on blur, so keyboard-only users can read and dismiss it without a pointer.
+- The tooltip content is exposed in the accessibility tree (not `aria-hidden`) while open; it uses `role="tooltip"` and is referenced by the trigger's `aria-describedby`.
+- Tooltip text must meet 4.5:1 contrast against its background in both light and dark themes.
+
+### Audit scope notes
+
+- The breadcrumb and help-tooltip components are exercised on the audited routes listed above (they render in the shared layout / page headers). Any new route that mounts them inherits coverage automatically once added to the `PAGES` array.
+- When adding a new `HelpTooltip`, verify: (1) the trigger has a non-empty accessible name, (2) `aria-describedby` resolves to an element that exists in the DOM, and (3) the tooltip is dismissible with `Escape`. These are the failure modes axe and the keyboard interaction tests are most likely to catch.
+
 ## Extending the audit
 
 To add a new page to the gate, add an entry to the `PAGES` array in `e2e/a11y.spec.ts` — the shared `runAxe()` helper and assertion are reused automatically. For flows that require user interaction (opening a modal, completing a multi-step form), follow the pattern in the two targeted tests at the bottom of that file: drive the interaction with Playwright, then call `runAxe(page)` and assert on `critical`/`serious` violations.

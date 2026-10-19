@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect } from "react";
+import * as Sentry from "@sentry/nextjs";
 
 interface Props {
   error: Error & { digest?: string };
@@ -9,13 +11,24 @@ interface Props {
 }
 
 export default function GlobalError({ error, reset }: Props) {
+  const pathname = usePathname();
+
   useEffect(() => {
     console.error("[GlobalError]", {
       message: error.message,
       digest: error.digest,
       stack: error.stack,
     });
-  }, [error]);
+
+    Sentry.withScope((scope) => {
+      scope.setTag("error_boundary", "app/error");
+      if (error.digest) {
+        scope.setTag("digest", error.digest);
+      }
+      scope.setContext("route", { pathname });
+      Sentry.captureException(error);
+    });
+  }, [error, pathname]);
 
   return (
     <main className="min-h-screen bg-gray-950 text-gray-100 flex items-center justify-center px-4">

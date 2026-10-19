@@ -143,7 +143,15 @@ export default function RootLayout({
                                 <p className="text-xs text-gray-500">
                                   © {new Date().getFullYear()} StellarSplit
                                 </p>
-                                <LanguageSwitcher />
+                                <div className="flex flex-wrap items-center gap-4">
+                                  <a
+                                    href="/docs/user-guide"
+                                    className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
+                                  >
+                                    Help &amp; User Guide
+                                  </a>
+                                  <LanguageSwitcher />
+                                </div>
                               </div>
                             </footer>
                             <CommandPalette />
