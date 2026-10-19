@@ -18,9 +18,7 @@ import { useExchangeRates } from "@/hooks/useExchangeRates";
 import type { RateLock } from "@/lib/currency";
 
 const STELLAR_EXPERT_BASE =
-  process.env.NEXT_PUBLIC_STELLAR_NETWORK === "mainnet"
-    ? "https://stellar.expert/explorer/public/tx"
-    : "https://stellar.expert/explorer/testnet/tx";
+  getActiveNetwork().explorerTxBase;
 
 type PaymentResult = { txHash?: string } | void;
 

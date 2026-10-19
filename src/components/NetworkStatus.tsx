@@ -4,35 +4,14 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useWalletBalance } from "../hooks/useWalletBalance";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 
-const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "";
 const POLL_MS = 60_000;
-
-/**
- * Resolve the network name from the environment variable.
- * Falls back to detecting testnet from the RPC URL when the env var is absent.
- */
-function resolveNetworkName(): "Mainnet" | "Testnet" | "Unknown" {
-  const envNet = process.env.NEXT_PUBLIC_STELLAR_NETWORK?.toLowerCase();
-  if (envNet === "mainnet") return "Mainnet";
-  if (envNet === "testnet") return "Testnet";
-  // Heuristic: if the RPC URL contains "testnet" or "futurenet" treat as Testnet
-  if (RPC_URL.toLowerCase().includes("testnet") || RPC_URL.toLowerCase().includes("futurenet")) {
-    return "Testnet";
-  }
-  if (RPC_URL.toLowerCase().includes("mainnet")) {
-    return "Mainnet";
-  }
-  return "Unknown";
-}
-
-const NETWORK = resolveNetworkName();
 
 type RpcStatus = "healthy" | "degraded" | "offline" | "checking";
 
-async function checkHealth(): Promise<RpcStatus> {
-  if (!RPC_URL) return "offline";
+async function checkHealth(rpcUrl: string): Promise<RpcStatus> {
+  if (!rpcUrl) return "offline";
   try {
-    const res = await fetch(RPC_URL, {
+    const res = await fetch(rpcUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth", params: {} }),
@@ -52,10 +31,9 @@ async function checkHealth(): Promise<RpcStatus> {
 /**
  * NetworkStatus
  *
- * Renders two adjacent badges in the navbar:
- * 1. A permanent Mainnet / Testnet network badge — always visible so users
- *    always know which Stellar network the application is connected to.
- * 2. An RPC health indicator (●) showing healthy / degraded / offline status.
+ * Renders an RPC health indicator (●) in the navbar showing healthy /
+ * degraded / offline status for the active network's Soroban RPC. The
+ * network itself is shown and switched by `NetworkSelector`.
  *
  * When the RPC is offline a dismissible banner is also shown at the top of the
  * page.
@@ -73,7 +51,7 @@ export default function NetworkStatus() {
   const { status: wcStatus } = useWalletConnect();
 
   const poll = useCallback(async () => {
-    const s = await checkHealth();
+    const s = await checkHealth(getActiveNetwork().rpcUrl);
     setStatus((prev) => {
       if (prev === "offline" && s !== "offline") {
         setJustReconnected(true);
@@ -219,9 +197,7 @@ export default function NetworkStatus() {
             {browserOffline
               ? "You are offline — transactions may fail"
               : "Network issues detected — transactions may fail"}
-            {NETWORK !== "Unknown" && (
-              <span className="ml-1 opacity-75">({NETWORK})</span>
-            )}
+            <span className="ml-1 opacity-75">({getActiveNetwork().label})</span>
           </span>
           <button
             type="button"

@@ -83,9 +83,7 @@ export default function VerifyIdentityPage() {
       const signedMessage = await signMessage(challenge, {
         address,
         networkPassphrase:
-          process.env.NEXT_PUBLIC_STELLAR_NETWORK === 'mainnet'
-            ? 'Public Global Stellar Network ; September 2015'
-            : 'Test SDF Network ; September 2015',
+          getActiveNetwork().passphrase,
       });
 
       // Store attestation
