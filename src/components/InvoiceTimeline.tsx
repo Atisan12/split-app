@@ -15,11 +15,19 @@ export interface InvoiceEvent {
     | 'DisputeRaised'
     | 'DisputeResolved'
     | 'Frozen'
-    | 'Archived';
+    | 'Archived'
+    | 'Amended'
+    | 'VersionRestored';
   description: string;
   actor?: string;
   timestamp: number; // unix seconds
   txHash?: string;
+  /** Version number produced by this event, if applicable. */
+  version?: number;
+  /** Human-readable reason supplied for an amendment. */
+  amendmentReason?: string;
+  /** Optional free-form comment accompanying an amendment. */
+  amendmentComment?: string;
 }
 
 interface Props {
@@ -44,6 +52,8 @@ const EVENT_META: Record<
   DisputeResolved: { icon: '🤝', color: 'text-green-400', dot: 'bg-green-500' },
   Frozen: { icon: '🧊', color: 'text-orange-400', dot: 'bg-orange-500' },
   Archived: { icon: '📦', color: 'text-gray-400', dot: 'bg-gray-500' },
+  Amended: { icon: '✏️', color: 'text-indigo-400', dot: 'bg-indigo-500' },
+  VersionRestored: { icon: '⏪', color: 'text-purple-400', dot: 'bg-purple-500' },
 };
 
 async function fetchEvents(invoiceId: string, cursor?: string): Promise<{ events: InvoiceEvent[]; nextCursor?: string }> {
@@ -150,7 +160,12 @@ export default function InvoiceTimeline({ invoiceId }: Props) {
         {events.map((evt, i) => {
           const meta = EVENT_META[evt.type] ?? EVENT_META.Created;
           const isExpanded = expandedIndices.has(i);
-          const hasDetails = evt.actor || evt.txHash;
+          const hasDetails =
+            evt.actor ||
+            evt.txHash ||
+            evt.version !== undefined ||
+            evt.amendmentReason ||
+            evt.amendmentComment;
           return (
             <li key={i} className="pl-6 relative">
               {/* dot */}
@@ -162,9 +177,19 @@ export default function InvoiceTimeline({ invoiceId }: Props) {
                 <span className={`font-medium text-sm ${meta.color}`}>
                   {meta.icon} {evt.type.replace(/([A-Z])/g, ' $1').trim()}
                 </span>
+                {evt.version !== undefined && (
+                  <span className="text-xs font-mono text-gray-500 bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5">
+                    v{evt.version}
+                  </span>
+                )}
                 <RelativeTime iso={new Date(evt.timestamp * 1000).toISOString()} className="text-xs text-gray-500 cursor-default" />
               </div>
               <p className="text-xs text-gray-400 mt-0.5">{evt.description}</p>
+              {evt.amendmentReason && (
+                <p className="text-xs text-indigo-300 mt-1">
+                  <span className="text-gray-500">Reason:</span> {evt.amendmentReason}
+                </p>
+              )}
 
               {hasDetails && (
                 <button
@@ -184,6 +209,11 @@ export default function InvoiceTimeline({ invoiceId }: Props) {
                 }}
                 className={`timeline-details ${isExpanded ? 'expanded' : 'collapsed'}`}
               >
+                {evt.amendmentComment && (
+                  <div className="mt-2 text-xs text-gray-400 bg-gray-800/60 border border-gray-700 rounded-lg px-3 py-2 whitespace-pre-wrap">
+                    {evt.amendmentComment}
+                  </div>
+                )}
                 {evt.actor && (
                   <div className="mt-2">
                     <WalletAddress address={evt.actor} truncate showCopy />

@@ -5,21 +5,32 @@ import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import type { Invoice } from "@stellar-split/sdk";
 import { formatAmount } from "@stellar-split/sdk";
 import { getInvoiceDisplayStatus } from "@/lib/dashboardFilters";
+import {
+  AGING_BUCKETS,
+  getAgingBucket,
+  getDaysOverdue,
+  type AgingBucketKey,
+} from "@/lib/invoiceAging";
 
 // ── Column definitions ────────────────────────────────────────────────────────
 
-export type SortColumn = "id" | "amount" | "status" | "deadline" | "funded";
+export type SortColumn = "id" | "amount" | "status" | "deadline" | "funded" | "aging";
 
-type ColumnKey = "id" | "status" | "amount" | "funded" | "deadline" | "tags" | "recipients";
+type ColumnKey = "id" | "status" | "amount" | "funded" | "deadline" | "aging" | "tags" | "recipients";
 
 const DEFAULT_COLUMNS: Record<ColumnKey, boolean> = {
-  id: true, status: true, amount: true, funded: true, deadline: true, tags: true, recipients: true,
+  id: true, status: true, amount: true, funded: true, deadline: true, aging: false, tags: true, recipients: true,
 };
 
 const COLUMN_LABELS: Record<ColumnKey, string> = {
   id: "ID", status: "Status", amount: "Amount", funded: "Funded",
-  deadline: "Deadline", tags: "Tags", recipients: "Recipients",
+  deadline: "Deadline", aging: "Aging", tags: "Tags", recipients: "Recipients",
 };
+
+const BUCKET_ORDER: Record<AgingBucketKey, number> = AGING_BUCKETS.reduce(
+  (acc, b, i) => ({ ...acc, [b.key]: i }),
+  {} as Record<AgingBucketKey, number>,
+);
 export type SortDir = "asc" | "desc";
 
 export interface InvoiceTableSortState {
@@ -74,6 +85,15 @@ function sortInvoices(
       });
     case "deadline":
       return list.sort((a, b) => mul * (a.deadline - b.deadline));
+    case "aging": {
+      const now = Math.floor(Date.now() / 1000);
+      return list.sort((a, b) => {
+        const ba = BUCKET_ORDER[getAgingBucket(a, now)];
+        const bb = BUCKET_ORDER[getAgingBucket(b, now)];
+        if (ba !== bb) return mul * (ba - bb);
+        return mul * (getDaysOverdue(a, now) - getDaysOverdue(b, now));
+      });
+    }
     case "status": {
       const now = Math.floor(Date.now() / 1000);
       return list.sort(
@@ -167,6 +187,8 @@ interface InvoiceTableProps {
   onSort?: (sort: InvoiceTableSortState) => void;
   /** Content to render in each row's action column */
   rowAction?: (inv: Invoice) => React.ReactNode;
+  /** When set, only invoices in this aging bucket are shown */
+  agingFilter?: AgingBucketKey | null;
 }
 
 /**
@@ -184,6 +206,7 @@ export default function InvoiceTable({
   sort: externalSort,
   onSort: externalOnSort,
   rowAction,
+  agingFilter = null,
 }: InvoiceTableProps) {
   const [internalSort, setInternalSort] =
     useState<InvoiceTableSortState>(DEFAULT_SORT);
@@ -239,7 +262,17 @@ export default function InvoiceTable({
     [sort, externalOnSort],
   );
 
-  const sorted = useMemo(() => sortInvoices(invoices, sort), [invoices, sort]);
+  const now = Math.floor(Date.now() / 1000);
+
+  const filtered = useMemo(
+    () =>
+      agingFilter
+        ? invoices.filter((inv) => getAgingBucket(inv, now) === agingFilter)
+        : invoices,
+    [invoices, agingFilter, now],
+  );
+
+  const sorted = useMemo(() => sortInvoices(filtered, sort), [filtered, sort]);
 
   if (invoices.length === 0) {
     return (
@@ -248,8 +281,6 @@ export default function InvoiceTable({
       </div>
     );
   }
-
-  const now = Math.floor(Date.now() / 1000);
 
   return (
     <div>
@@ -311,6 +342,9 @@ export default function InvoiceTable({
               )}
               {colVisible.deadline && (
                 <SortHeader column="deadline" label="Deadline" sort={sort} onSort={handleSort} className="w-36" />
+              )}
+              {colVisible.aging && (
+                <SortHeader column="aging" label="Aging" sort={sort} onSort={handleSort} className="w-32" />
               )}
               {colVisible.tags && (
                 <th scope="col" className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -415,6 +449,27 @@ export default function InvoiceTable({
                       )}
                     </td>
                   )}
+
+                  {colVisible.aging && (() => {
+                    const bucket = getAgingBucket(inv, now);
+                    const days = getDaysOverdue(inv, now);
+                    const meta = AGING_BUCKETS.find((b) => b.key === bucket);
+                    return (
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col gap-0.5">
+                          <span
+                            className={`inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${meta?.className ?? "bg-gray-500/20 text-gray-400"}`}
+                            aria-label={`Aging bucket: ${meta?.label ?? bucket}`}
+                          >
+                            {meta?.label ?? bucket}
+                          </span>
+                          {days > 0 && (
+                            <span className="text-[11px] text-amber-400">{days}d overdue</span>
+                          )}
+                        </div>
+                      </td>
+                    );
+                  })()}
 
                   {colVisible.tags && (
                     <td className="px-4 py-3">

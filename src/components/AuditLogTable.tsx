@@ -14,6 +14,10 @@ interface AuditLogEntry {
   action: string;
   actor: string;
   timestamp: number;
+  version?: number;
+  diffSummary?: string;
+  amendmentReason?: string;
+  amendmentComment?: string;
 }
 
 interface Props {
@@ -40,7 +44,21 @@ export default function AuditLogTable({ invoiceId, invoice }: Props) {
   const handleExportJSON = () => {
     if (!invoice) return;
     const nonPendingPayments = invoice.payments.filter((p) => !p.pending);
-    const archive = buildInvoiceArchive(invoice, entries, nonPendingPayments);
+    const versionHistory = entries
+      .filter((entry) => entry.version !== undefined)
+      .map((entry) => ({
+        version: entry.version,
+        action: entry.action,
+        actor: entry.actor,
+        timestamp: entry.timestamp,
+        diffSummary: entry.diffSummary,
+        amendmentReason: entry.amendmentReason,
+        amendmentComment: entry.amendmentComment,
+      }));
+    const archive = {
+      ...buildInvoiceArchive(invoice, entries, nonPendingPayments),
+      versionHistory,
+    };
     const filename = generateArchiveFilename(invoiceId);
     downloadInvoiceArchive(archive, filename);
   };
@@ -121,6 +139,8 @@ export default function AuditLogTable({ invoiceId, invoice }: Props) {
           <thead>
             <tr className="border-b border-gray-700">
               <th className="text-left px-4 py-2 font-semibold text-gray-300">Action</th>
+              <th className="text-left px-4 py-2 font-semibold text-gray-300">Version</th>
+              <th className="text-left px-4 py-2 font-semibold text-gray-300">Changes</th>
               <th className="text-left px-4 py-2 font-semibold text-gray-300">Actor</th>
               <th className="text-left px-4 py-2 font-semibold text-gray-300">Timestamp</th>
             </tr>
@@ -129,6 +149,27 @@ export default function AuditLogTable({ invoiceId, invoice }: Props) {
             {paginatedEntries.map((entry, idx) => (
               <tr key={idx} className="border-b border-gray-800 hover:bg-gray-900/50">
                 <td className="px-4 py-3 text-gray-200">{entry.action}</td>
+                <td className="px-4 py-3 text-gray-400">
+                  {entry.version !== undefined ? `v${entry.version}` : "—"}
+                </td>
+                <td className="px-4 py-3 text-gray-400 text-xs">
+                  {entry.diffSummary ? (
+                    <span className="block text-gray-300">{entry.diffSummary}</span>
+                  ) : null}
+                  {entry.amendmentReason ? (
+                    <span className="block text-amber-400">
+                      Reason: {entry.amendmentReason}
+                    </span>
+                  ) : null}
+                  {entry.amendmentComment ? (
+                    <span className="block text-gray-500 italic">
+                      {entry.amendmentComment}
+                    </span>
+                  ) : null}
+                  {!entry.diffSummary && !entry.amendmentReason && !entry.amendmentComment
+                    ? "—"
+                    : null}
+                </td>
                 <td className="px-4 py-3 font-mono text-gray-400 truncate" title={entry.actor}>
                   {truncateAddress(entry.actor)}
                 </td>

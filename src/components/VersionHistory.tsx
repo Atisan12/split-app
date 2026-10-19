@@ -4,6 +4,12 @@ import { useEffect, useState } from "react";
 import { splitClient } from "@/lib/stellar";
 import { truncateAddress } from "@stellar-split/sdk";
 import RelativeTime from "@/components/ui/RelativeTime";
+import {
+  getInvoiceVersions,
+  notifyAffectedParties,
+  type InvoiceVersion,
+  type InvoiceVersionDiff,
+} from "@/lib/invoiceVersioning";
 
 interface HistoryEntry {
   action: string;
@@ -13,6 +19,12 @@ interface HistoryEntry {
   address?: string;
   /** Structured diff for the expanded diff view (issue #606). */
   diff?: FieldDiff[];
+  /** Amendment reason recorded with the version (issue #937). */
+  reason?: string;
+  /** Free-form amendment comment recorded with the version (issue #937). */
+  comment?: string;
+  /** Author of the amendment (issue #937). */
+  author?: string;
 }
 
 /** A single field change shown in the diff panel. */
@@ -132,6 +144,28 @@ function buildDiff(entry: any): FieldDiff[] {
   }
 
   return diffs;
+}
+
+// ─── Version mapping ─────────────────────────────────────────────────────────
+
+/** Map a stored invoice version into the timeline entry shape. */
+function mapVersionToEntry(version: InvoiceVersion): HistoryEntry {
+  const diff: FieldDiff[] = (version.diff ?? []).map((d: InvoiceVersionDiff) => ({
+    field: d.field,
+    before: d.before,
+    after: d.after,
+  }));
+
+  return {
+    action: version.action
+      ? version.action.replace(/_/g, " ").charAt(0).toUpperCase() + version.action.slice(1)
+      : "Amendment",
+    timestamp: version.timestamp,
+    diff,
+    reason: version.reason,
+    comment: version.comment,
+    author: version.author,
+  };
 }
 
 // ─── DiffPanel ────────────────────────────────────────────────────────────────
@@ -384,48 +418,74 @@ export default function VersionHistory({ invoiceId, onRestore }: Props) {
     const loadHistory = async () => {
       try {
         setLoading(true);
-        const auditLog = await (splitClient as any).getAuditLog(invoiceId);
 
-        if (!auditLog || auditLog.length === 0) {
-          setHistory([]);
-          return;
+        // Prefer the versioned store; fall back to the raw audit log.
+        let entries: HistoryEntry[] = [];
+        try {
+          const versions = await getInvoiceVersions(invoiceId);
+          if (versions && versions.length > 0) {
+            entries = versions.map(mapVersionToEntry);
+          }
+        } catch {
+          // Version store unavailable — fall through to audit log.
         }
 
-        const entries: HistoryEntry[] = auditLog.map((entry: any) => {
-          const action = entry.action || entry.type;
-          const timestamp = entry.timestamp || entry.createdAt;
+        if (entries.length === 0) {
+          const auditLog = await (splitClient as any).getAuditLog(invoiceId);
 
-          if (action === "extend_deadline") {
-            return {
-              action: "Deadline Extended",
-              timestamp,
-              oldValue: new Date(entry.oldDeadline * 1000).toLocaleDateString(),
-              newValue: new Date(entry.newDeadline * 1000).toLocaleDateString(),
-              diff: buildDiff(entry),
-            };
-          } else if (action === "add_co_creator") {
-            return {
-              action: "Co-creator Added",
-              timestamp,
-              address: entry.address,
-              diff: buildDiff(entry),
-            };
-          } else if (action === "remove_co_creator") {
-            return {
-              action: "Co-creator Removed",
-              timestamp,
-              address: entry.address,
-              diff: buildDiff(entry),
-            };
+          if (!auditLog || auditLog.length === 0) {
+            setHistory([]);
+            return;
           }
 
-          return {
-            action:
-              action.replace(/_/g, " ").charAt(0).toUpperCase() + action.slice(1),
-            timestamp,
-            diff: buildDiff(entry),
-          };
-        });
+          entries = auditLog.map((entry: any) => {
+            const action = entry.action || entry.type;
+            const timestamp = entry.timestamp || entry.createdAt;
+
+            if (action === "extend_deadline") {
+              return {
+                action: "Deadline Extended",
+                timestamp,
+                oldValue: new Date(entry.oldDeadline * 1000).toLocaleDateString(),
+                newValue: new Date(entry.newDeadline * 1000).toLocaleDateString(),
+                diff: buildDiff(entry),
+                reason: entry.reason,
+                comment: entry.comment,
+                author: entry.author,
+              };
+            } else if (action === "add_co_creator") {
+              return {
+                action: "Co-creator Added",
+                timestamp,
+                address: entry.address,
+                diff: buildDiff(entry),
+                reason: entry.reason,
+                comment: entry.comment,
+                author: entry.author,
+              };
+            } else if (action === "remove_co_creator") {
+              return {
+                action: "Co-creator Removed",
+                timestamp,
+                address: entry.address,
+                diff: buildDiff(entry),
+                reason: entry.reason,
+                comment: entry.comment,
+                author: entry.author,
+              };
+            }
+
+            return {
+              action:
+                action.replace(/_/g, " ").charAt(0).toUpperCase() + action.slice(1),
+              timestamp,
+              diff: buildDiff(entry),
+              reason: entry.reason,
+              comment: entry.comment,
+              author: entry.author,
+            };
+          });
+        }
 
         setHistory(entries.sort((a, b) => b.timestamp - a.timestamp));
       } catch (err) {
@@ -463,6 +523,18 @@ export default function VersionHistory({ invoiceId, onRestore }: Props) {
     if (onRestore) {
       onRestore(restoreIndex, entry);
     }
+
+    // Notify affected parties (creator, recipients, payers) of the amendment.
+    void notifyAffectedParties(invoiceId, {
+      action: "restore_version",
+      versionNumber: entry.versionNumber,
+      reason: entry.reason,
+      comment: entry.comment,
+      diff: entry.diff,
+    }).catch(() => {
+      // Notification failures must not block the restore flow.
+    });
+
     setRestoreNotice(
       `Version ${entry.versionNumber} (${entry.action}) has been queued for restore. A new history entry will be created.`
     );
@@ -635,7 +707,30 @@ export default function VersionHistory({ invoiceId, onRestore }: Props) {
                   <RelativeTime
                     iso={new Date(entry.timestamp * 1000).toISOString()}
                   />
+                  {entry.author && (
+                    <span className="ml-2 text-gray-500">
+                      by <span className="font-mono">{truncateAddress(entry.author)}</span>
+                    </span>
+                  )}
                 </p>
+
+                {/* Amendment reason & comment (issue #937) */}
+                {(entry.reason || entry.comment) && (
+                  <div className="mt-2 rounded-lg border border-gray-700 bg-gray-800/40 px-3 py-2 text-xs">
+                    {entry.reason && (
+                      <p className="text-gray-300">
+                        <span className="font-semibold text-gray-400">Reason: </span>
+                        {entry.reason}
+                      </p>
+                    )}
+                    {entry.comment && (
+                      <p className="text-gray-400 mt-1">
+                        <span className="font-semibold text-gray-500">Comment: </span>
+                        {entry.comment}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Legacy inline diff (always shown for extend_deadline) */}
                 {entry.oldValue && entry.newValue && !isExpanded && (

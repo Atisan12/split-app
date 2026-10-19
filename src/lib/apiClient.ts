@@ -10,6 +10,66 @@
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+/**
+ * Analytics hook. Kept as a lightweight, fire-and-forget emitter so the API
+ * client has no hard dependency on a specific analytics provider. Query
+ * strings and request bodies are never forwarded; only the path template,
+ * method, status code and duration are reported.
+ */
+export type ApiRequestEvent = {
+  method: string;
+  path: string;
+  status: number;
+  durationMs: number;
+};
+
+type ApiRequestTracker = (event: ApiRequestEvent) => void;
+
+let apiRequestTracker: ApiRequestTracker | null = null;
+
+export function setApiRequestTracker(tracker: ApiRequestTracker | null): void {
+  apiRequestTracker = tracker;
+}
+
+function toPathTemplate(input: RequestInfo | URL): string {
+  let raw: string;
+  if (typeof input === "string") {
+    raw = input;
+  } else if (input instanceof URL) {
+    raw = input.pathname;
+  } else {
+    raw = input.url;
+  }
+
+  // Strip query string / fragment so no user-supplied parameters leak.
+  const withoutQuery = raw.split(/[?#]/, 1)[0] ?? "";
+
+  // Reduce absolute URLs to their pathname.
+  if (/^https?:\/\//i.test(withoutQuery)) {
+    try {
+      return new URL(withoutQuery).pathname;
+    } catch {
+      return withoutQuery;
+    }
+  }
+  return withoutQuery;
+}
+
+function trackApiRequest(event: ApiRequestEvent): void {
+  if (!apiRequestTracker) {
+    return;
+  }
+  // Schedule after the current task so tracking never delays the response,
+  // and swallow any errors so analytics can't break the caller.
+  setTimeout(() => {
+    try {
+      apiRequestTracker?.(event);
+    } catch {
+      // Intentionally ignored: analytics must never throw into the caller.
+    }
+  }, 0);
+}
+
 // Refresh a little early so a request that starts right before expiry
 // doesn't race the server-side clock.
 const REFRESH_SKEW_MS = 60 * 1000;
@@ -58,6 +118,9 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
     return fetch(input, init);
   }
 
+  const path = toPathTemplate(input);
+  const startedAt = Date.now();
+
   const attempt = async (token: string) => {
     const headers = new Headers(init.headers);
     headers.set("X-CSRF-Token", token);
@@ -67,9 +130,12 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
   const token = await getCsrfToken();
   const response = await attempt(token);
   if (response.status !== 403) {
+    trackApiRequest({ method, path, status: response.status, durationMs: Date.now() - startedAt });
     return response;
   }
 
   const freshToken = await getCsrfToken(true);
-  return attempt(freshToken);
+  const retryResponse = await attempt(freshToken);
+  trackApiRequest({ method, path, status: retryResponse.status, durationMs: Date.now() - startedAt });
+  return retryResponse;
 }

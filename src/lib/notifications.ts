@@ -7,6 +7,8 @@ interface NotificationPreferences {
   deadlineApproaching: boolean;
   invoiceReleased: boolean;
   invoiceRefunded: boolean;
+  agingAlert: boolean;
+  backupFailure: boolean;
 }
 
 const DEFAULT_PREFS: NotificationPreferences = {
@@ -15,6 +17,8 @@ const DEFAULT_PREFS: NotificationPreferences = {
   deadlineApproaching: true,
   invoiceReleased: true,
   invoiceRefunded: true,
+  agingAlert: true,
+  backupFailure: true,
 };
 
 function getPreferences(): NotificationPreferences {
@@ -127,6 +131,30 @@ export function notifyInvoiceRefunded(invoiceId: string): void {
   sendBrowserNotification(`Invoice #${invoiceId} refunded`, {
     body: "All payments have been refunded.",
     tag: `invoice-refunded-${invoiceId}`,
+  });
+}
+
+/** Notify when an invoice crosses an aging threshold (e.g. 30/60/90 days). */
+export function notifyInvoiceAging(
+  invoiceId: string,
+  bucketLabel: string,
+  daysOverdue: number
+): void {
+  const prefs = getPreferences();
+  if (!prefs.agingAlert) return;
+  sendBrowserNotification(`Invoice #${invoiceId} is aging (${bucketLabel})`, {
+    body: `${daysOverdue} day${daysOverdue !== 1 ? 's' : ''} overdue.`,
+    tag: `aging-alert-${invoiceId}-${bucketLabel}`,
+  });
+}
+
+/** Notify when an automated backup run fails. */
+export function notifyBackupFailure(reason: string, runId?: string): void {
+  const prefs = getPreferences();
+  if (!prefs.backupFailure) return;
+  sendBrowserNotification("Automated backup failed", {
+    body: reason,
+    tag: runId ? `backup-failure-${runId}` : "backup-failure",
   });
 }
 

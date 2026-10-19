@@ -2,6 +2,32 @@ import { NextRequest, NextResponse } from "next/server";
 import { buildCSP, CSP_NONCE_HEADER } from "@/lib/csp";
 
 /**
+ * Reads analytics/backup configuration from environment so that no
+ * third-party domains are hardcoded into the CSP. When analytics is
+ * disabled (the default), the policy stays strict and no extra origins
+ * are allowed.
+ */
+function getAnalyticsOrigins(): string[] {
+  if (process.env.ANALYTICS_ENABLED !== "true") {
+    return [];
+  }
+  return (process.env.ANALYTICS_ENDPOINT_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+function getBackupWebhookOrigins(): string[] {
+  if (process.env.BACKUP_ALERTS_ENABLED !== "true") {
+    return [];
+  }
+  return (process.env.BACKUP_WEBHOOK_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+/**
  * Generates a fresh CSP nonce per request and forwards it two ways:
  *  - as a request header, so Server Components can read it via next/headers
  *    and stamp it onto any inline <script>/<style> tags they render
@@ -12,7 +38,16 @@ import { buildCSP, CSP_NONCE_HEADER } from "@/lib/csp";
 export function middleware(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const isEmbed = request.nextUrl.pathname.startsWith("/embed/");
-  const csp = buildCSP(nonce, { allowFraming: isEmbed });
+
+  const connectSrc = [
+    ...getAnalyticsOrigins(),
+    ...getBackupWebhookOrigins(),
+  ];
+
+  const csp = buildCSP(nonce, {
+    allowFraming: isEmbed,
+    connectSrc: connectSrc.length > 0 ? connectSrc : undefined,
+  });
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set(CSP_NONCE_HEADER, nonce);

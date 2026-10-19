@@ -152,6 +152,110 @@ export function filterPaymentsByDateRange(
   });
 }
 
+export interface AgingReportRow {
+  bucket: string;
+  invoice_count: number;
+  total_amount: string;
+  overdue_amount: string;
+  overdue_rate: string;
+}
+
+export interface AgingTrendRow {
+  period: string;
+  bucket: string;
+  invoice_count: number;
+  total_amount: string;
+  overdue_amount: string;
+}
+
+export const AGING_REPORT_COLUMNS = [
+  "bucket",
+  "invoice_count",
+  "total_amount",
+  "overdue_amount",
+  "overdue_rate",
+] as const;
+
+export type AgingReportColumn = (typeof AGING_REPORT_COLUMNS)[number];
+
+export const AGING_REPORT_COLUMN_LABELS: Record<AgingReportColumn, string> = {
+  bucket: "Aging Bucket",
+  invoice_count: "Invoice Count",
+  total_amount: "Total Amount (USDC)",
+  overdue_amount: "Overdue Amount (USDC)",
+  overdue_rate: "Overdue Rate",
+};
+
+export const AGING_TREND_COLUMNS = [
+  "period",
+  "bucket",
+  "invoice_count",
+  "total_amount",
+  "overdue_amount",
+] as const;
+
+export type AgingTrendColumn = (typeof AGING_TREND_COLUMNS)[number];
+
+export const AGING_TREND_COLUMN_LABELS: Record<AgingTrendColumn, string> = {
+  period: "Period",
+  bucket: "Aging Bucket",
+  invoice_count: "Invoice Count",
+  total_amount: "Total Amount (USDC)",
+  overdue_amount: "Overdue Amount (USDC)",
+};
+
+/**
+ * Convert aging bucket rows to CSV string
+ */
+export function agingReportToCSV(
+  rows: AgingReportRow[],
+  columns: readonly AgingReportColumn[] = AGING_REPORT_COLUMNS
+): string {
+  const activeColumns = columns.length > 0 ? columns : AGING_REPORT_COLUMNS;
+  const lines = [activeColumns.join(",")];
+
+  for (const row of rows) {
+    lines.push(
+      activeColumns
+        .map((column) => escapeCSVField(String(row[column] ?? "")))
+        .join(",")
+    );
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Convert aging trend rows to CSV string
+ */
+export function agingTrendToCSV(
+  rows: AgingTrendRow[],
+  columns: readonly AgingTrendColumn[] = AGING_TREND_COLUMNS
+): string {
+  const activeColumns = columns.length > 0 ? columns : AGING_TREND_COLUMNS;
+  const lines = [activeColumns.join(",")];
+
+  for (const row of rows) {
+    lines.push(
+      activeColumns
+        .map((column) => escapeCSVField(String(row[column] ?? "")))
+        .join(",")
+    );
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Generate filename for aging report export
+ */
+export function generateAgingReportFilename(
+  reportType: "aging" | "trend" = "aging"
+): string {
+  const date = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+  return `invoice-${reportType}-report-${date}.csv`;
+}
+
 export interface CsvRow {
   [key: string]: string | number;
 }
