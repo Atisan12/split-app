@@ -14,15 +14,16 @@ import type { WalletConnectStatus } from "@/hooks/useWalletConnect";
 const STORAGE_KEY = "stellarsplit_wallet";
 const PRIVACY_KEY = "stellarsplit_wallet_persistence";
 
-interface CachedWallet {
+export interface WalletConnection {
   address: string;
   walletType: WalletType;
   timestamp: number;
 }
 
 interface WalletState {
-  address: string | null;
-  walletType: WalletType | null;
+  connections: WalletConnection[];
+  activeAddress: string | null;
+  activeWalletType: WalletType | null;
   connecting: boolean;
   error: string | null;
   freighterInstalled: boolean | null;
@@ -55,13 +56,13 @@ function readCache(): CachedWallet | null {
     ) {
       return parsed as CachedWallet;
     }
-    return null;
+    return empty;
   } catch {
-    return null;
+    return empty;
   }
 }
 
-function writeCache(wallet: CachedWallet | null) {
+function writeCache(wallets: PersistedWallets) {
   if (typeof window === "undefined") return;
   try {
     if (!wallet) {
@@ -73,6 +74,18 @@ function writeCache(wallet: CachedWallet | null) {
     // localStorage unavailable (private mode, etc.) — connection state
     // just won't persist across a refresh.
   }
+}
+
+function toPersisted(state: WalletState): PersistedWallets {
+  return { connections: state.connections, activeAddress: state.activeAddress };
+}
+
+function activeType(
+  connections: WalletConnection[],
+  activeAddress: string | null
+): WalletType | null {
+  if (!activeAddress) return null;
+  return connections.find((c) => c.address === activeAddress)?.walletType ?? null;
 }
 
 /**
@@ -96,18 +109,19 @@ export function setWalletPersistence(enabled: boolean) {
 /**
  * Shared Freighter/WalletConnect connection state.
  *
- * Reads any cached public key from sessionStorage synchronously (so the
- * first paint already reflects a previously-granted connection), then
- * silently re-verifies it against the wallet extension before paint via
- * useLayoutEffect — no approval popup when the wallet already granted
- * permission.
+ * Reads the persisted connection list from localStorage synchronously (so
+ * the first paint already reflects previously-granted connections), then
+ * silently re-verifies each stored connection against its wallet before
+ * paint via useLayoutEffect — no approval popup when the wallet already
+ * granted permission. Connections that fail verification are dropped.
  */
 export function useWallet() {
   const [state, setState] = useState<WalletState>(() => {
     const cached = readCache();
     return {
-      address: cached?.address ?? null,
-      walletType: cached?.walletType ?? null,
+      connections: cached.connections,
+      activeAddress: cached.activeAddress,
+      activeWalletType: activeType(cached.connections, cached.activeAddress),
       connecting: false,
       error: null,
       freighterInstalled: null,
@@ -139,7 +153,15 @@ export function useWallet() {
         }
       }
 
-      if (!cached) return;
+      if (cached.connections.length === 0) return;
+
+      const valid: WalletConnection[] = [];
+      for (const connection of cached.connections) {
+        // For Freighter, only skip straight to getPublicKey() (no popup) when
+        // isConnected() confirms the extension already granted this origin
+        // access. For WalletConnect there's no equivalent probe — fall back
+        // to the existing silent getWalletConnectPublicKey() check.
+        if (connection.walletType === "freighter" && !freighterConnected) continue;
 
       // For Freighter, only skip straight to getPublicKey() (no popup) when
       // isConnected() confirms the extension already granted this origin
@@ -156,13 +178,12 @@ export function useWallet() {
         return;
       }
 
-      try {
-        const key =
-          cached.walletType === "freighter"
-            ? await getFreighterPublicKey()
-            : await getWalletConnectPublicKey();
+      if (cancelled) return;
 
-        if (cancelled) return;
+      const activeAddress =
+        cached.activeAddress && valid.some((c) => c.address === cached.activeAddress)
+          ? cached.activeAddress
+          : valid[0]?.address ?? null;
 
         if (key && key === cached.address) {
           setState((prev) => ({ ...prev, address: key, walletType: cached.walletType }));
@@ -239,12 +260,16 @@ export function useWallet() {
   const wcStatus: WalletConnectStatus = walletConnect.status;
 
   return {
-    address: state.address,
-    walletType: state.walletType,
+    address: state.activeAddress,
+    walletType: state.activeWalletType,
+    connections: state.connections,
+    activeAddress: state.activeAddress,
+    activeWalletType: state.activeWalletType,
     connecting: state.connecting,
     error: state.error,
     freighterInstalled: state.freighterInstalled,
     connect,
+    switchTo,
     disconnect,
     // WalletConnect v2 pairing/connection state (#884)
     wcStatus,
