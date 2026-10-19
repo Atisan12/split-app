@@ -45,6 +45,12 @@ interface NotificationPreferences {
   deadlineApproaching: boolean;
   invoiceReleased: boolean;
   invoiceRefunded: boolean;
+  milestoneConditionMet: boolean;
+  milestoneReleased: boolean;
+  disputeOpened: boolean;
+  disputeEvidenceSubmitted: boolean;
+  disputeResolved: boolean;
+  disputeEnforced: boolean;
 }
 
 const DEFAULT_PREFS: NotificationPreferences = {
@@ -53,6 +59,12 @@ const DEFAULT_PREFS: NotificationPreferences = {
   deadlineApproaching: true,
   invoiceReleased: true,
   invoiceRefunded: true,
+  milestoneConditionMet: true,
+  milestoneReleased: true,
+  disputeOpened: true,
+  disputeEvidenceSubmitted: true,
+  disputeResolved: true,
+  disputeEnforced: true,
 };
 
 function getPreferences(): NotificationPreferences {
