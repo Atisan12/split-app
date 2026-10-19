@@ -1,3 +1,10 @@
+import {
+  AppError,
+  AppErrorCode,
+  createAppError,
+  RecoverySuggestion,
+} from './appError';
+
 export type ErrorActionType = 'bump-fee' | 'refresh-seq' | 'fund-destination' | 'manual';
 
 export interface ParsedStellarError {
@@ -7,6 +14,80 @@ export interface ParsedStellarError {
   suggestedAction: string;
   actionType: ErrorActionType;
 }
+
+/**
+ * Maps a Stellar/Horizon result code to the AppError taxonomy code.
+ */
+const STELLAR_TO_APP_ERROR_CODE: Record<string, AppErrorCode> = {
+  tx_insufficient_fee: 'STELLAR_INSUFFICIENT_FEE',
+  tx_bad_seq: 'STELLAR_BAD_SEQUENCE',
+  op_no_destination: 'STELLAR_NO_DESTINATION',
+  op_underfunded: 'STELLAR_UNDERFUNDED',
+  tx_failed: 'STELLAR_TX_FAILED',
+  op_no_trust: 'STELLAR_NO_TRUSTLINE',
+};
+
+/**
+ * Whether a given Stellar result code is worth retrying (possibly after a
+ * recovery action such as bumping the fee or refreshing the sequence).
+ */
+const STELLAR_RETRYABLE: Record<string, boolean> = {
+  tx_insufficient_fee: true,
+  tx_bad_seq: true,
+  op_no_destination: false,
+  op_underfunded: false,
+  tx_failed: false,
+  op_no_trust: false,
+};
+
+/**
+ * Recovery suggestions keyed by Stellar result code, expressed in the
+ * AppError taxonomy so they can be surfaced consistently across the app.
+ */
+const STELLAR_RECOVERY: Record<string, RecoverySuggestion[]> = {
+  tx_insufficient_fee: [
+    {
+      label: 'Increase transaction fee',
+      description: 'Bump the fee to match current network conditions.',
+      actionType: 'bump-fee',
+    },
+  ],
+  tx_bad_seq: [
+    {
+      label: 'Refresh sequence number',
+      description: 'Reload the account sequence from the network and retry.',
+      actionType: 'refresh-seq',
+    },
+  ],
+  op_no_destination: [
+    {
+      label: 'Fund destination account',
+      description: 'Send at least 1 XLM to the destination to activate it.',
+      actionType: 'fund-destination',
+    },
+  ],
+  op_underfunded: [
+    {
+      label: 'Add funds',
+      description: 'Top up the source account balance and try again.',
+      actionType: 'manual',
+    },
+  ],
+  tx_failed: [
+    {
+      label: 'Review transaction details',
+      description: 'Check the detailed error and verify account requirements.',
+      actionType: 'manual',
+    },
+  ],
+  op_no_trust: [
+    {
+      label: 'Create trustline',
+      description: 'Establish a trustline for the asset before retrying.',
+      actionType: 'manual',
+    },
+  ],
+};
 
 const ERROR_MAPPING: Record<string, ParsedStellarError> = {
   tx_insufficient_fee: {
@@ -97,4 +178,109 @@ export function isSequenceError(error: any): boolean {
 export function isFundingError(error: any): boolean {
   const parsed = parseStellarError(error?.message || error?.code || String(error), error);
   return parsed.actionType === 'fund-destination';
+}
+
+/**
+ * Extracts a normalized Stellar result code from a variety of error shapes:
+ * plain strings, Horizon HTTP error responses, and RPC error objects.
+ */
+export function extractStellarResultCode(error: unknown): string | undefined {
+  if (error == null) return undefined;
+
+  if (typeof error === 'string') {
+    const trimmed = error.trim();
+    return trimmed.length > 0 ? trimmed.toLowerCase() : undefined;
+  }
+
+  if (typeof error !== 'object') {
+    return String(error).toLowerCase();
+  }
+
+  const anyError = error as any;
+
+  // Horizon HTTP response shape: { response: { data: { result_code, extras: { result_codes } } } }
+  const data = anyError.response?.data ?? anyError.data;
+  if (data) {
+    if (typeof data.result_code === 'string') {
+      return data.result_code.toLowerCase();
+    }
+    const resultCodes = data.extras?.result_codes;
+    if (resultCodes) {
+      const candidates: unknown[] = [
+        ...(Array.isArray(resultCodes.transaction) ? resultCodes.transaction : [resultCodes.transaction]),
+        ...(Array.isArray(resultCodes.operations) ? resultCodes.operations : [resultCodes.operations]),
+      ];
+      for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.length > 0) {
+          return candidate.toLowerCase();
+        }
+      }
+    }
+  }
+
+  // RPC / generic error object shapes
+  if (typeof anyError.result_code === 'string') {
+    return anyError.result_code.toLowerCase();
+  }
+  if (typeof anyError.code === 'string') {
+    return anyError.code.toLowerCase();
+  }
+  if (typeof anyError.message === 'string') {
+    return anyError.message.toLowerCase();
+  }
+
+  return undefined;
+}
+
+/**
+ * Normalizes any Stellar/Horizon/RPC error into the AppError taxonomy.
+ * Known result codes map to specific AppError codes with retryable flags and
+ * recovery suggestions; unknown codes fall back to a generic AppError.
+ */
+export function toAppError(error: unknown): AppError {
+  const resultCode = extractStellarResultCode(error);
+
+  if (resultCode) {
+    // Direct or partial match against known Stellar result codes.
+    let matchedKey: string | undefined;
+    if (STELLAR_TO_APP_ERROR_CODE[resultCode]) {
+      matchedKey = resultCode;
+    } else {
+      matchedKey = Object.keys(STELLAR_TO_APP_ERROR_CODE).find((key) =>
+        resultCode.includes(key),
+      );
+    }
+
+    if (matchedKey) {
+      const parsed = ERROR_MAPPING[matchedKey];
+      return createAppError({
+        code: STELLAR_TO_APP_ERROR_CODE[matchedKey],
+        title: parsed.title,
+        message: parsed.explanation,
+        retryable: STELLAR_RETRYABLE[matchedKey] ?? false,
+        recovery: STELLAR_RECOVERY[matchedKey] ?? [],
+        cause: error,
+        context: { stellarResultCode: matchedKey },
+      });
+    }
+  }
+
+  // Fallback for unknown errors.
+  return createAppError({
+    code: 'UNKNOWN_ERROR',
+    title: 'Transaction Error',
+    message: resultCode
+      ? `The transaction failed with error: ${resultCode}`
+      : 'An unexpected error occurred while processing the transaction.',
+    retryable: false,
+    recovery: [
+      {
+        label: 'Review error details',
+        description: 'Review the error details and contact support if the issue persists.',
+        actionType: 'manual',
+      },
+    ],
+    cause: error,
+    context: resultCode ? { stellarResultCode: resultCode } : undefined,
+  });
 }

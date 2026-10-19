@@ -9,10 +9,25 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts', './src/__tests__/setup.ts'],
     exclude: ['e2e/**', 'node_modules/**'],
+    include: [
+      'src/**/*.{test,spec}.{ts,tsx}',
+      'src/**/__tests__/**/*.{test,spec}.{ts,tsx}',
+      'src/__tests__/**/*.{test,spec}.{ts,tsx}',
+    ],
     server: {
       deps: {
         inline: ['@stellar/freighter-api', '@stellar-split/sdk'],
       },
+    },
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'html'],
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: [
+        'src/**/*.{test,spec}.{ts,tsx}',
+        'src/**/__tests__/**',
+        'src/**/*.d.ts',
+      ],
     },
   },
   resolve: {

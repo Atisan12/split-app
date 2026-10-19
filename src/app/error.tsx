@@ -2,6 +2,12 @@
 
 import Link from "next/link";
 import { useEffect } from "react";
+import {
+  classifyError,
+  getErrorTemplate,
+  getRecoverySuggestions,
+} from "@/lib/errors";
+import { logger } from "@/lib/logger";
 
 interface Props {
   error: Error & { digest?: string };
@@ -9,13 +15,18 @@ interface Props {
 }
 
 export default function GlobalError({ error, reset }: Props) {
+  const errorType = classifyError(error);
+  const template = getErrorTemplate(errorType);
+  const suggestions = getRecoverySuggestions(errorType);
+
   useEffect(() => {
-    console.error("[GlobalError]", {
+    logger.error("[GlobalError]", {
+      type: errorType,
       message: error.message,
       digest: error.digest,
       stack: error.stack,
     });
-  }, [error]);
+  }, [error, errorType]);
 
   return (
     <main className="min-h-screen bg-gray-950 text-gray-100 flex items-center justify-center px-4">
@@ -24,11 +35,17 @@ export default function GlobalError({ error, reset }: Props) {
           StellarSplit
         </span>
         <div className="flex flex-col gap-2">
-          <h1 className="text-2xl font-bold">Something went wrong</h1>
-          <p className="text-gray-400 text-sm">
-            An unexpected error occurred. You can try again or return home.
-          </p>
+          <h1 className="text-2xl font-bold">{template.title}</h1>
+          <p className="text-gray-400 text-sm">{template.message}</p>
         </div>
+
+        {suggestions.length > 0 && (
+          <ul className="w-full text-left text-sm text-gray-400 list-disc list-inside flex flex-col gap-1">
+            {suggestions.map((suggestion) => (
+              <li key={suggestion}>{suggestion}</li>
+            ))}
+          </ul>
+        )}
 
         <div className="flex gap-3">
           <button
@@ -36,7 +53,7 @@ export default function GlobalError({ error, reset }: Props) {
             onClick={reset}
             className="min-h-11 px-6 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
           >
-            Try Again
+            {template.retryLabel}
           </button>
           <Link
             href="/"

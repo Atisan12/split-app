@@ -20,6 +20,26 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    {
+      name: 'error-handling',
+      testMatch: /error-handling\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'retry',
+      testMatch: /retry\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'offline-queue',
+      testMatch: /offline-queue\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'api-docs',
+      testMatch: /api-docs\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+    },
   ],
 
   webServer: {
