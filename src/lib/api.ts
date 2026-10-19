@@ -57,7 +57,7 @@ export async function apiFetch(
   input: RequestInfo | URL,
   init?: RequestInit
 ): Promise<Response> {
-  const response = await fetch(input, init);
+  const response = await fetch(input, withCsrf(init));
 
   if (response.status !== 429) return response;
 
@@ -75,7 +75,229 @@ export async function apiFetch(
   // Clear rate-limit state after retry fires.
   notify(null);
 
-  return fetch(input, init);
+  return fetch(input, withCsrf(init));
+}
+
+/**
+ * Attach the CSRF token (if available) to mutating requests. Non-mutating
+ * requests and requests that already carry a token are left untouched.
+ */
+function withCsrf(init?: RequestInit): RequestInit | undefined {
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
+    return init;
+  }
+  const token = getCsrfToken();
+  if (!token) return init;
+  const headers = new Headers(init?.headers);
+  if (!headers.has("X-CSRF-Token")) headers.set("X-CSRF-Token", token);
+  return { ...init, headers };
+}
+
+/** Read the CSRF token from the cookie or meta tag, if present. */
+function getCsrfToken(): string | null {
+  if (typeof document === "undefined") return null;
+  const meta = document.querySelector<HTMLMetaElement>(
+    'meta[name="csrf-token"]'
+  );
+  if (meta?.content) return meta.content;
+  const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/** Parse a JSON response, throwing a descriptive error on failure. */
+async function parseJson<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    let message = `Request failed with status ${response.status}`;
+    try {
+      const body = await response.json();
+      if (body && typeof body.error === "string") message = body.error;
+    } catch {
+      // Ignore body parse failures; fall back to the status message.
+    }
+    throw new Error(message);
+  }
+  return (await response.json()) as T;
+}
+
+function jsonInit(method: string, body?: unknown): RequestInit {
+  return {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Recurring invoice schedules (#873)
+// ---------------------------------------------------------------------------
+
+export type RecurringFrequency = "daily" | "weekly" | "monthly" | "custom";
+
+export interface RecurringSchedule {
+  id: string;
+  templateId: string;
+  frequency: RecurringFrequency;
+  /** Interval in days; required when frequency is "custom". */
+  intervalDays?: number;
+  startDate: string;
+  endDate?: string;
+  status: "active" | "paused" | "cancelled";
+  nextRunAt?: string;
+}
+
+export interface RecurringScheduleInput {
+  templateId: string;
+  frequency: RecurringFrequency;
+  intervalDays?: number;
+  startDate: string;
+  endDate?: string;
+}
+
+export async function listRecurringSchedules(): Promise<RecurringSchedule[]> {
+  const res = await apiFetch("/api/recurring-schedules");
+  return parseJson<RecurringSchedule[]>(res);
+}
+
+export async function getRecurringSchedule(
+  id: string
+): Promise<RecurringSchedule> {
+  const res = await apiFetch(`/api/recurring-schedules/${encodeURIComponent(id)}`);
+  return parseJson<RecurringSchedule>(res);
+}
+
+export async function createRecurringSchedule(
+  input: RecurringScheduleInput
+): Promise<RecurringSchedule> {
+  const res = await apiFetch(
+    "/api/recurring-schedules",
+    jsonInit("POST", input)
+  );
+  return parseJson<RecurringSchedule>(res);
+}
+
+export async function updateRecurringSchedule(
+  id: string,
+  input: Partial<RecurringScheduleInput>
+): Promise<RecurringSchedule> {
+  const res = await apiFetch(
+    `/api/recurring-schedules/${encodeURIComponent(id)}`,
+    jsonInit("PATCH", input)
+  );
+  return parseJson<RecurringSchedule>(res);
+}
+
+export async function deleteRecurringSchedule(id: string): Promise<void> {
+  const res = await apiFetch(
+    `/api/recurring-schedules/${encodeURIComponent(id)}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to delete schedule (status ${res.status})`);
+  }
+}
+
+export async function setRecurringScheduleStatus(
+  id: string,
+  status: "active" | "paused" | "cancelled"
+): Promise<RecurringSchedule> {
+  const res = await apiFetch(
+    `/api/recurring-schedules/${encodeURIComponent(id)}/status`,
+    jsonInit("POST", { status })
+  );
+  return parseJson<RecurringSchedule>(res);
+}
+
+// ---------------------------------------------------------------------------
+// Multi-currency support (#874)
+// ---------------------------------------------------------------------------
+
+export interface ExchangeRate {
+  base: string;
+  quote: string;
+  rate: number;
+  updatedAt: string;
+}
+
+export interface RateLock {
+  id: string;
+  base: string;
+  quote: string;
+  rate: number;
+  lockedAt: string;
+  expiresAt: string;
+}
+
+export async function getExchangeRates(
+  base: string,
+  quotes: string[]
+): Promise<ExchangeRate[]> {
+  const params = new URLSearchParams({ base });
+  quotes.forEach((q) => params.append("quote", q));
+  const res = await apiFetch(`/api/currency/rates?${params.toString()}`);
+  return parseJson<ExchangeRate[]>(res);
+}
+
+export async function createRateLock(
+  base: string,
+  quote: string
+): Promise<RateLock> {
+  const res = await apiFetch(
+    "/api/currency/rate-locks",
+    jsonInit("POST", { base, quote })
+  );
+  return parseJson<RateLock>(res);
+}
+
+// ---------------------------------------------------------------------------
+// Invoice bundling (#875)
+// ---------------------------------------------------------------------------
+
+export interface InvoiceBundle {
+  id: string;
+  invoiceIds: string[];
+  status: "draft" | "sent" | "partially_paid" | "paid" | "cancelled";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InvoiceBundleInput {
+  invoiceIds: string[];
+}
+
+export interface BundleAnalytics {
+  bundleId: string;
+  totalAmount: number;
+  paidAmount: number;
+  invoiceCount: number;
+  paidCount: number;
+}
+
+export async function createInvoiceBundle(
+  input: InvoiceBundleInput
+): Promise<InvoiceBundle> {
+  const res = await apiFetch("/api/bundles", jsonInit("POST", input));
+  return parseJson<InvoiceBundle>(res);
+}
+
+export async function updateInvoiceBundle(
+  id: string,
+  input: Partial<InvoiceBundleInput>
+): Promise<InvoiceBundle> {
+  const res = await apiFetch(
+    `/api/bundles/${encodeURIComponent(id)}`,
+    jsonInit("PATCH", input)
+  );
+  return parseJson<InvoiceBundle>(res);
+}
+
+export async function getBundleAnalytics(
+  id: string
+): Promise<BundleAnalytics> {
+  const res = await apiFetch(
+    `/api/bundles/${encodeURIComponent(id)}/analytics`
+  );
+  return parseJson<BundleAnalytics>(res);
 }
 
 /* -------------------------------------------------------------------------- */

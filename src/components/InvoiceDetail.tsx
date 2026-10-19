@@ -112,6 +112,25 @@ export interface InvoiceDetailProps {
 }
 
 const DEFAULT_CURRENCY = 'USD';
+const XLM_CURRENCY = 'XLM';
+const RATE_DECIMALS = 6;
+
+function formatXlmAmount(amount: number, rate: number): string {
+  const converted = (Math.max(0, amount) / 100) * rate;
+  return `${converted.toFixed(RATE_DECIMALS)} ${XLM_CURRENCY}`;
+}
+
+function formatRate(rate: number): string {
+  return `1 ${XLM_CURRENCY} = ${(1 / rate).toFixed(RATE_DECIMALS)}`;
+}
+
+function formatTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
 
 function formatCurrency(amount: number, currency: string): string {
   try {
@@ -404,6 +423,21 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({
     [amount, currency],
   );
 
+  const effectiveRate = lockedRate ?? xlmRate;
+  const isRateLocked = lockedRate !== null && lockedRate !== undefined;
+
+  const convertedAmount = useMemo(() => {
+    if (effectiveRate === null || effectiveRate === undefined) {
+      return null;
+    }
+    return formatXlmAmount(amount, effectiveRate);
+  }, [amount, effectiveRate]);
+
+  const historyForCurrency = useMemo(
+    () => currencyHistory.filter((snapshot) => snapshot.currency === currency),
+    [currencyHistory, currency],
+  );
+
   return (
     <section
       className="invoice-detail"
@@ -417,6 +451,45 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({
         >
           {formattedAmount}
         </h2>
+        <p className="invoice-detail__currency">Currency: {currency}</p>
+
+        <div className="invoice-detail__conversion" aria-live="polite">
+          {rateLoading ? (
+            <span className="invoice-detail__status" role="status">
+              Loading exchange rate\u2026
+            </span>
+          ) : rateError ? (
+            <span
+              className="invoice-detail__status invoice-detail__status--error"
+              role="alert"
+            >
+              {rateError}
+            </span>
+          ) : convertedAmount ? (
+            <>
+              <span className="invoice-detail__converted-amount">
+                \u2248 {convertedAmount}
+              </span>
+              {effectiveRate !== null && effectiveRate !== undefined ? (
+                <span className="invoice-detail__rate">
+                  {formatRate(effectiveRate)}
+                </span>
+              ) : null}
+              {isRateLocked ? (
+                <span className="invoice-detail__rate-lock">
+                  Rate locked
+                  {rateLockedUntil
+                    ? ` until ${formatTimestamp(rateLockedUntil)}`
+                    : ''}
+                </span>
+              ) : null}
+            </>
+          ) : (
+            <span className="invoice-detail__status">
+              XLM conversion unavailable
+            </span>
+          )}
+        </div>
       </header>
 
       {loading ? (
