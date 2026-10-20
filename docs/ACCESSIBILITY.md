@@ -53,30 +53,47 @@ The initial audit surfaced the following categories of critical/serious violatio
 - **Browser coverage locally vs. CI.** A fresh dev sandbox may only have the Chromium Playwright browser installed. CI installs Chromium, Firefox, and WebKit via `npx playwright install --with-deps`, so the merge gate is multi-engine even when a local run (`npx playwright test --grep @a11y`) only exercises Chromium.
 - **Moderate/minor axe findings are not gated on.** Only `critical`/`serious` impact violations fail the build, per the acceptance criteria. Any moderate/minor findings surfaced by axe during a run are not currently tracked separately.
 
-## Breadcrumbs and contextual help
+## Component-level automated testing
 
-The breadcrumb navigation (`src/components/Breadcrumbs.tsx`) and contextual help system (`src/components/HelpTooltip.tsx`) are covered by the same axe gate and have an explicit accessibility contract:
+In addition to the page-level Playwright + `@axe-core/playwright` gate
+above, `src/__tests__/a11y/componentA11y.test.tsx` runs `axe-core` directly
+against individual components rendered under jsdom (via Vitest). This is
+faster to run locally (`npm test -- a11y`) and isolates violations to a
+single component rather than a whole page, which is useful for catching
+ARIA/labelling regressions in shared primitives (e.g. `StatusBadge`,
+`Skeleton`) before they ripple into every page that uses them.
 
-### Breadcrumbs
+## Manual review process
 
-- Rendered as a `<nav aria-label="Breadcrumb">` landmark so screen readers can jump to it.
-- The trail is an ordered list (`<ol>`); each crumb is an `<li>`.
-- The current page is marked with `aria-current="page"` on its link/text and is not itself a link target.
-- Separators are decorative (`aria-hidden="true"`) so they are not announced.
-- Every crumb is a real focusable link (or plain text for the current page) reachable in DOM order via Tab.
+Automated tooling (axe-core) catches a large share of WCAG violations but
+not all of them — contrast on dynamically-rendered custom canvases,
+meaningful reading order, and genuine screen-reader usability all need a
+human pass. The manual review checklist below should be run once per
+release cycle and whenever a new page/flow is added to the audit scope:
 
-### Contextual help (`HelpTooltip`)
-
-- The trigger is a `<button type="button">` with an accessible name (`aria-label`, e.g. "Help: Invoice status") — never an icon-only element without a label.
-- The help text is associated with the trigger via `aria-describedby` pointing at the tooltip content element, so the description is announced when the trigger receives focus.
-- The tooltip opens on focus **and** hover, and closes on `Escape` and on blur, so keyboard-only users can read and dismiss it without a pointer.
-- The tooltip content is exposed in the accessibility tree (not `aria-hidden`) while open; it uses `role="tooltip"` and is referenced by the trigger's `aria-describedby`.
-- Tooltip text must meet 4.5:1 contrast against its background in both light and dark themes.
-
-### Audit scope notes
-
-- The breadcrumb and help-tooltip components are exercised on the audited routes listed above (they render in the shared layout / page headers). Any new route that mounts them inherits coverage automatically once added to the `PAGES` array.
-- When adding a new `HelpTooltip`, verify: (1) the trigger has a non-empty accessible name, (2) `aria-describedby` resolves to an element that exists in the DOM, and (3) the tooltip is dismissible with `Escape`. These are the failure modes axe and the keyboard interaction tests are most likely to catch.
+1. **Screen reader pass** — navigate each audited route (see Scope above)
+   with VoiceOver (macOS/iOS) or NVDA (Windows), confirm:
+   - Page title and heading structure are announced sensibly on load.
+   - Every interactive element (buttons, links, form fields) has an
+     announced name that matches its visible label or purpose.
+   - Dynamic updates (toasts, status changes, form errors) are announced
+     via `aria-live`/`role="status"`/`role="alert"` rather than silently
+     appearing.
+2. **Keyboard navigation pass** — unplug the mouse and confirm every
+   interactive control is reachable via `Tab`/`Shift+Tab`, has a visible
+   focus indicator, and can be activated with `Enter`/`Space`. Confirm
+   focus order matches visual/reading order and that no keyboard trap
+   exists (a modal's `Escape` always closes it and returns focus to the
+   trigger).
+3. **Color contrast spot-check** — for any new custom-colored UI (badges,
+   charts, illustrations) not already covered by the automated gate, check
+   contrast with a tool such as the browser DevTools contrast checker
+   against the 4.5:1 (normal text) / 3:1 (large text, 18px+ bold or 24px+)
+   thresholds.
+4. **Document findings** — file an issue (or a checklist comment on the PR)
+   for anything found, tag it `a11y`, and link it from this document's
+   "Known limitations" section until fixed. Once fixed, add a short note to
+   the "What was fixed" section above so the audit trail stays complete.
 
 ## Extending the audit
 
