@@ -1,43 +1,5 @@
 const STORAGE_KEY = "stellarsplit-notify-invoices";
 const PREFS_KEY = "stellarsplit-notification-prefs";
-const REMINDER_CHANNELS_KEY = "stellarsplit-reminder-channel-prefs";
-
-/** Delivery channels available for payment reminders. */
-export type ReminderChannel = "email" | "push" | "inApp";
-
-export interface ReminderChannelPreferences {
-  email: boolean;
-  push: boolean;
-  inApp: boolean;
-}
-
-const DEFAULT_REMINDER_CHANNELS: ReminderChannelPreferences = {
-  email: true,
-  push: true,
-  inApp: true,
-};
-
-/** Read the user's reminder channel preferences. */
-export function getReminderChannelPreferences(): ReminderChannelPreferences {
-  if (typeof window === "undefined") return DEFAULT_REMINDER_CHANNELS;
-  try {
-    const raw = localStorage.getItem(REMINDER_CHANNELS_KEY);
-    return raw
-      ? { ...DEFAULT_REMINDER_CHANNELS, ...JSON.parse(raw) }
-      : DEFAULT_REMINDER_CHANNELS;
-  } catch {
-    return DEFAULT_REMINDER_CHANNELS;
-  }
-}
-
-/** Persist the user's reminder channel preferences. */
-export function setReminderChannelPreferences(
-  prefs: Partial<ReminderChannelPreferences>
-): void {
-  if (typeof window === "undefined") return;
-  const merged = { ...getReminderChannelPreferences(), ...prefs };
-  localStorage.setItem(REMINDER_CHANNELS_KEY, JSON.stringify(merged));
-}
 
 interface NotificationPreferences {
   paymentReceived: boolean;
@@ -45,12 +7,8 @@ interface NotificationPreferences {
   deadlineApproaching: boolean;
   invoiceReleased: boolean;
   invoiceRefunded: boolean;
-  milestoneConditionMet: boolean;
-  milestoneReleased: boolean;
-  disputeOpened: boolean;
-  disputeEvidenceSubmitted: boolean;
-  disputeResolved: boolean;
-  disputeEnforced: boolean;
+  agingAlert: boolean;
+  backupFailure: boolean;
 }
 
 const DEFAULT_PREFS: NotificationPreferences = {
@@ -59,12 +17,8 @@ const DEFAULT_PREFS: NotificationPreferences = {
   deadlineApproaching: true,
   invoiceReleased: true,
   invoiceRefunded: true,
-  milestoneConditionMet: true,
-  milestoneReleased: true,
-  disputeOpened: true,
-  disputeEvidenceSubmitted: true,
-  disputeResolved: true,
-  disputeEnforced: true,
+  agingAlert: true,
+  backupFailure: true,
 };
 
 function getPreferences(): NotificationPreferences {
@@ -180,24 +134,27 @@ export function notifyInvoiceRefunded(invoiceId: string): void {
   });
 }
 
-/**
- * Deliver an in-app payment reminder for an invoice.
- * Respects the user's in-app reminder channel preference and the
- * existing notification preferences (paymentReceived acts as the
- * master toggle for payment-related notifications).
- */
-export function sendInAppReminder(
+/** Notify when an invoice crosses an aging threshold (e.g. 30/60/90 days). */
+export function notifyInvoiceAging(
   invoiceId: string,
-  message: string,
-  level: number
+  bucketLabel: string,
+  daysOverdue: number
 ): void {
-  const channels = getReminderChannelPreferences();
-  if (!channels.inApp) return;
   const prefs = getPreferences();
-  if (!prefs.paymentReceived) return;
-  sendBrowserNotification(`Payment reminder for Invoice #${invoiceId}`, {
-    body: message,
-    tag: `payment-reminder-${invoiceId}-${level}`,
+  if (!prefs.agingAlert) return;
+  sendBrowserNotification(`Invoice #${invoiceId} is aging (${bucketLabel})`, {
+    body: `${daysOverdue} day${daysOverdue !== 1 ? 's' : ''} overdue.`,
+    tag: `aging-alert-${invoiceId}-${bucketLabel}`,
+  });
+}
+
+/** Notify when an automated backup run fails. */
+export function notifyBackupFailure(reason: string, runId?: string): void {
+  const prefs = getPreferences();
+  if (!prefs.backupFailure) return;
+  sendBrowserNotification("Automated backup failed", {
+    body: reason,
+    tag: runId ? `backup-failure-${runId}` : "backup-failure",
   });
 }
 

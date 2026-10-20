@@ -6,71 +6,68 @@
  * on POST/PUT/PATCH/DELETE requests, refreshing the cached token before it
  * expires and transparently retrying once if a request is rejected with 403
  * because the token expired mid-flight.
- *
- * Non-OK responses are surfaced as `AppError` instances (see src/lib/errors.ts)
- * so callers get a stable error code, a user-friendly message and recovery
- * suggestions. Transient failures (network errors, 5xx, 429) are retried with
- * exponential backoff + jitter via `retryWithBackoff` (see src/lib/retry.ts),
- * and retry attempts are announced through `onRetry` so the UI can toast.
  */
-
-import { AppError, ErrorCode, type ErrorCodeValue } from "@/lib/errors";
-import { retryWithBackoff, type RetryEvent } from "@/lib/retry";
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-/** Options controlling retry behaviour and notifications for `apiFetch`. */
-export interface ApiFetchOptions extends RequestInit {
-  /** Maximum number of retry attempts for transient failures. Defaults to 3. */
-  maxRetries?: number;
-  /** Base delay (ms) for exponential backoff. Defaults to 300ms. */
-  baseDelayMs?: number;
-  /** Maximum delay (ms) between retries. Defaults to 10_000ms. */
-  maxDelayMs?: number;
-  /** Invoked before each retry so the UI can notify the user. */
-  onRetry?: (event: RetryEvent) => void;
+/**
+ * Analytics hook. Kept as a lightweight, fire-and-forget emitter so the API
+ * client has no hard dependency on a specific analytics provider. Query
+ * strings and request bodies are never forwarded; only the path template,
+ * method, status code and duration are reported.
+ */
+export type ApiRequestEvent = {
+  method: string;
+  path: string;
+  status: number;
+  durationMs: number;
+};
+
+type ApiRequestTracker = (event: ApiRequestEvent) => void;
+
+let apiRequestTracker: ApiRequestTracker | null = null;
+
+export function setApiRequestTracker(tracker: ApiRequestTracker | null): void {
+  apiRequestTracker = tracker;
 }
 
-/** Maps an HTTP status code to the closest matching `AppError` code. */
-export function statusToErrorCode(status: number): ErrorCodeValue {
-  switch (status) {
-    case 400:
-      return ErrorCode.VALIDATION;
-    case 401:
-      return ErrorCode.UNAUTHORIZED;
-    case 403:
-      return ErrorCode.FORBIDDEN;
-    case 404:
-      return ErrorCode.NOT_FOUND;
-    case 409:
-      return ErrorCode.CONFLICT;
-    case 429:
-      return ErrorCode.RATE_LIMITED;
-    default:
-      if (status >= 500) return ErrorCode.SERVER;
-      return ErrorCode.UNKNOWN;
+function toPathTemplate(input: RequestInfo | URL): string {
+  let raw: string;
+  if (typeof input === "string") {
+    raw = input;
+  } else if (input instanceof URL) {
+    raw = input.pathname;
+  } else {
+    raw = input.url;
   }
-}
 
-/** True for failures worth retrying: network errors, 5xx and 429. */
-export function isRetryableStatus(status: number): boolean {
-  return status === 429 || status >= 500;
-}
+  // Strip query string / fragment so no user-supplied parameters leak.
+  const withoutQuery = raw.split(/[?#]/, 1)[0] ?? "";
 
-async function toAppError(response: Response): Promise<AppError> {
-  let detail: string | undefined;
-  try {
-    const body = await response.clone().json();
-    detail = typeof body?.message === "string" ? body.message : undefined;
-  } catch {
-    // Body was not JSON; fall back to the status text.
-    detail = response.statusText || undefined;
+  // Reduce absolute URLs to their pathname.
+  if (/^https?:\/\//i.test(withoutQuery)) {
+    try {
+      return new URL(withoutQuery).pathname;
+    } catch {
+      return withoutQuery;
+    }
   }
-  return new AppError(statusToErrorCode(response.status), {
-    status: response.status,
-    detail,
-    cause: response,
-  });
+  return withoutQuery;
+}
+
+function trackApiRequest(event: ApiRequestEvent): void {
+  if (!apiRequestTracker) {
+    return;
+  }
+  // Schedule after the current task so tracking never delays the response,
+  // and swallow any errors so analytics can't break the caller.
+  setTimeout(() => {
+    try {
+      apiRequestTracker?.(event);
+    } catch {
+      // Intentionally ignored: analytics must never throw into the caller.
+    }
+  }, 0);
 }
 
 // Refresh a little early so a request that starts right before expiry
@@ -114,61 +111,31 @@ export function getCachedCsrfExpiry(): number {
  * fetch() wrapper that attaches a CSRF token to mutating requests and
  * retries once, with a freshly-fetched token, if the server rejects the
  * first attempt with 403.
- *
- * Transient failures (network errors, 5xx, 429) are retried with exponential
- * backoff and jitter. Once retries are exhausted (or for non-retryable
- * failures) a non-OK response is thrown as an `AppError`.
  */
-export async function apiFetch(
-  input: RequestInfo | URL,
-  init: ApiFetchOptions = {},
-): Promise<Response> {
-  const { maxRetries, baseDelayMs, maxDelayMs, onRetry, ...requestInit } = init;
-  const method = (requestInit.method ?? "GET").toUpperCase();
+export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
   if (!MUTATING_METHODS.has(method)) {
-    return fetch(input, requestInit);
+    return fetch(input, init);
   }
+
+  const path = toPathTemplate(input);
+  const startedAt = Date.now();
 
   const attempt = async (token: string) => {
-    const headers = new Headers(requestInit.headers);
+    const headers = new Headers(init.headers);
     headers.set("X-CSRF-Token", token);
-    return fetch(input, { ...requestInit, headers });
+    return fetch(input, { ...init, headers });
   };
 
-  // Single CSRF retry: refresh the token and try again on a 403.
-  const attemptWithCsrfRetry = async (): Promise<Response> => {
-    const token = await getCsrfToken();
-    const response = await attempt(token);
-    if (response.status !== 403) {
-      return response;
-    }
-    const freshToken = await getCsrfToken(true);
-    return attempt(freshToken);
-  };
-
-  const response = await retryWithBackoff(
-    async () => {
-      const res = await attemptWithCsrfRetry();
-      if (!res.ok && isRetryableStatus(res.status)) {
-        // Throw so the retry handler treats it as a transient failure.
-        throw await toAppError(res);
-      }
-      return res;
-    },
-    {
-      maxRetries,
-      baseDelayMs,
-      maxDelayMs,
-      onRetry,
-      isRetryable: (error) =>
-        error instanceof AppError
-          ? error.status !== undefined && isRetryableStatus(error.status)
-          : true, // network errors are retryable
-    },
-  );
-
-  if (!response.ok) {
-    throw await toAppError(response);
+  const token = await getCsrfToken();
+  const response = await attempt(token);
+  if (response.status !== 403) {
+    trackApiRequest({ method, path, status: response.status, durationMs: Date.now() - startedAt });
+    return response;
   }
-  return response;
+
+  const freshToken = await getCsrfToken(true);
+  const retryResponse = await attempt(freshToken);
+  trackApiRequest({ method, path, status: retryResponse.status, durationMs: Date.now() - startedAt });
+  return retryResponse;
 }

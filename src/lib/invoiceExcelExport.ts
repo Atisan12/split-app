@@ -42,6 +42,203 @@ export interface TransactionExportRow {
   status: string;
 }
 
+export interface AgingBucketExportRow {
+  bucket: string;
+  invoiceCount: number;
+  outstandingAmount: string;
+  overdueAmount: string;
+  overdueRate: string;
+  collectionEfficiency: string;
+}
+
+export interface AgingTrendExportRow {
+  period: string;
+  invoiceCount: number;
+  outstandingAmount: string;
+  overdueAmount: string;
+  overdueRate: string;
+  collectionEfficiency: string;
+}
+
+export interface AgingReportExport {
+  buckets: AgingBucketExportRow[];
+  trends: AgingTrendExportRow[];
+}
+
+/** Aging bucket definitions, ordered from current to most overdue. */
+export const AGING_BUCKETS: Array<{ label: string; minDays: number; maxDays: number }> = [
+  { label: 'Current', minDays: -Infinity, maxDays: 0 },
+  { label: '1-30 days', minDays: 1, maxDays: 30 },
+  { label: '31-60 days', minDays: 31, maxDays: 60 },
+  { label: '61-90 days', minDays: 61, maxDays: 90 },
+  { label: '90+ days', minDays: 91, maxDays: Infinity },
+];
+
+const DAY_SECONDS = 86400;
+
+function invoiceTotal(invoice: Invoice): bigint {
+  return invoice.recipients.reduce((sum, r) => sum + r.amount, 0n);
+}
+
+function invoiceOutstanding(invoice: Invoice): bigint {
+  const outstanding = invoiceTotal(invoice) - invoice.funded;
+  return outstanding > 0n ? outstanding : 0n;
+}
+
+function daysOverdue(invoice: Invoice, nowSeconds: number): number {
+  if (!invoice.deadline || invoice.deadline <= 0) return 0;
+  return Math.floor((nowSeconds - invoice.deadline) / DAY_SECONDS);
+}
+
+function bucketForDays(days: number): string {
+  for (const bucket of AGING_BUCKETS) {
+    if (days >= bucket.minDays && days <= bucket.maxDays) return bucket.label;
+  }
+  return AGING_BUCKETS[AGING_BUCKETS.length - 1].label;
+}
+
+function formatRate(numerator: bigint, denominator: bigint): string {
+  if (denominator <= 0n) return '0.00%';
+  const scaled = (numerator * 10000n) / denominator;
+  return `${(Number(scaled) / 100).toFixed(2)}%`;
+}
+
+/**
+ * Build aging bucket and trend rows for the aging report worksheet.
+ * Uses the same filter options as the invoice export so the aging report
+ * reflects exactly the invoices being exported.
+ */
+export function buildAgingReport(
+  invoices: Invoice[],
+  options: ExportFilterOptions = {},
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): AgingReportExport {
+  const filtered = filterInvoices(invoices, options);
+
+  const bucketTotals = new Map<
+    string,
+    { count: number; outstanding: bigint; overdue: bigint; collected: bigint; total: bigint }
+  >();
+  for (const bucket of AGING_BUCKETS) {
+    bucketTotals.set(bucket.label, {
+      count: 0,
+      outstanding: 0n,
+      overdue: 0n,
+      collected: 0n,
+      total: 0n,
+    });
+  }
+
+  const trendTotals = new Map<
+    string,
+    { count: number; outstanding: bigint; overdue: bigint; collected: bigint; total: bigint }
+  >();
+
+  for (const invoice of filtered) {
+    const total = invoiceTotal(invoice);
+    const outstanding = invoiceOutstanding(invoice);
+    const days = daysOverdue(invoice, nowSeconds);
+    const isOverdue = days > 0 && outstanding > 0n;
+    const overdue = isOverdue ? outstanding : 0n;
+    const collected = invoice.funded > 0n ? invoice.funded : 0n;
+
+    const bucketLabel = bucketForDays(days);
+    const bucket = bucketTotals.get(bucketLabel)!;
+    bucket.count += 1;
+    bucket.outstanding += outstanding;
+    bucket.overdue += overdue;
+    bucket.collected += collected;
+    bucket.total += total;
+
+    const period = new Date(
+      (invoice.deadline > 0 ? invoice.deadline : nowSeconds) * 1000
+    ).toISOString().slice(0, 7);
+    const trend = trendTotals.get(period) ?? {
+      count: 0,
+      outstanding: 0n,
+      overdue: 0n,
+      collected: 0n,
+      total: 0n,
+    };
+    trend.count += 1;
+    trend.outstanding += outstanding;
+    trend.overdue += overdue;
+    trend.collected += collected;
+    trend.total += total;
+    trendTotals.set(period, trend);
+  }
+
+  const buckets: AgingBucketExportRow[] = AGING_BUCKETS.map((bucket) => {
+    const totals = bucketTotals.get(bucket.label)!;
+    return {
+      bucket: bucket.label,
+      invoiceCount: totals.count,
+      outstandingAmount: formatAmount(totals.outstanding),
+      overdueAmount: formatAmount(totals.overdue),
+      overdueRate: formatRate(totals.overdue, totals.outstanding),
+      collectionEfficiency: formatRate(totals.collected, totals.total),
+    };
+  });
+
+  const trends: AgingTrendExportRow[] = Array.from(trendTotals.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([period, totals]) => ({
+      period,
+      invoiceCount: totals.count,
+      outstandingAmount: formatAmount(totals.outstanding),
+      overdueAmount: formatAmount(totals.overdue),
+      overdueRate: formatRate(totals.overdue, totals.outstanding),
+      collectionEfficiency: formatRate(totals.collected, totals.total),
+    }));
+
+  return { buckets, trends };
+}
+
+/**
+ * Build the aging worksheet definition (bucket summary + trend rows)
+ * for inclusion in the generated Excel workbook.
+ */
+export function buildAgingWorksheet(
+  invoices: Invoice[],
+  options: ExportFilterOptions = {},
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): { name: string; headers: string[]; rows: Record<string, string | number>[] } {
+  const report = buildAgingReport(invoices, options, nowSeconds);
+
+  const headers = [
+    'Section',
+    'Period / Bucket',
+    'Invoice Count',
+    'Outstanding Amount',
+    'Overdue Amount',
+    'Overdue Rate',
+    'Collection Efficiency',
+  ];
+
+  const rows: Record<string, string | number>[] = [
+    ...report.buckets.map((bucket) => ({
+      Section: 'Aging Bucket',
+      'Period / Bucket': bucket.bucket,
+      'Invoice Count': bucket.invoiceCount,
+      'Outstanding Amount': bucket.outstandingAmount,
+      'Overdue Amount': bucket.overdueAmount,
+      'Overdue Rate': bucket.overdueRate,
+      'Collection Efficiency': bucket.collectionEfficiency,
+    })),
+    ...report.trends.map((trend) => ({
+      Section: 'Trend',
+      'Period / Bucket': trend.period,
+      'Invoice Count': trend.invoiceCount,
+      'Outstanding Amount': trend.outstandingAmount,
+      'Overdue Amount': trend.overdueAmount,
+      'Overdue Rate': trend.overdueRate,
+      'Collection Efficiency': trend.collectionEfficiency,
+    })),
+  ];
+
+  return { name: 'Aging Report', headers, rows };
+}
+
 /**
  * Convert invoices to export rows
  */
@@ -274,4 +471,49 @@ export function downloadExcel(
 export function generateExportFilename(prefix = 'invoices'): string {
   const date = new Date().toISOString().split('T')[0];
   return `${prefix}-${date}.xlsx`;
+}
+
+/**
+ * Generate Excel binary data including the aging report worksheet.
+ * Reuses the existing filter options so the aging sheet matches the
+ * invoices, line items and transactions being exported.
+ */
+export async function generateExcelBinaryWithAging(
+  invoices: Invoice[],
+  options: ExportFilterOptions = {},
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): Promise<Uint8Array> {
+  const filtered = filterInvoices(invoices, options);
+
+  const sheets = [
+    {
+      name: 'Invoices',
+      headers: [
+        'invoiceId',
+        'status',
+        'creator',
+        'totalAmount',
+        'fundedAmount',
+        'remainingAmount',
+        'recipientCount',
+        'deadline',
+        'createdAt',
+        'token',
+      ],
+      rows: invoicesToExportRows(filtered) as unknown as Record<string, string | number>[],
+    },
+    {
+      name: 'Line Items',
+      headers: ['invoiceId', 'recipientAddress', 'amount', 'status'],
+      rows: lineItemsToExportRows(filtered) as unknown as Record<string, string | number>[],
+    },
+    {
+      name: 'Transactions',
+      headers: ['invoiceId', 'payer', 'amount', 'timestamp', 'txHash', 'status'],
+      rows: transactionsToExportRows(filtered) as unknown as Record<string, string | number>[],
+    },
+    buildAgingWorksheet(filtered, {}, nowSeconds),
+  ];
+
+  return generateExcelBinary(sheets);
 }

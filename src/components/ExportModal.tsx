@@ -1,15 +1,15 @@
 'use client';
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import type { Invoice } from '@stellar-split/sdk';
 import type { ExportFilterOptions } from '@/lib/invoiceExcelExport';
+import { downloadExcel, generateExportFilename } from '@/lib/invoiceExcelExport';
 import {
-  exportPayments,
-  addExportHistoryEntry,
-  getExportHistory,
-  type ExportFormat,
-  type ExportHistoryEntry,
-} from '@/lib/paymentExport';
+  downloadAgingReportCsv,
+  downloadAgingReportExcel,
+  generateAgingReportFilename,
+} from '@/lib/invoiceAgingExport';
+import { apiFetch } from '@/lib/apiClient';
 
 /** Return a date string in "YYYY-MM-DD" format for an offset of `daysAgo` from today. */
 function dateString(daysAgo: number = 0): string {
@@ -32,16 +32,9 @@ export default function ExportModal({
   onExport,
 }: ExportModalProps) {
   const [isExporting, setIsExporting] = useState(false);
+  const [isExportingAging, setIsExportingAging] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [exportFormat, setExportFormat] = useState<ExportFormat>('csv');
-  const [history, setHistory] = useState<ExportHistoryEntry[]>([]);
-
-  // Load recent export history when the modal opens
-  useEffect(() => {
-    if (isOpen) {
-      setHistory(getExportHistory());
-    }
-  }, [isOpen]);
+  const [success, setSuccess] = useState<string | null>(null);
 
   // Date-range state — "From" defaults to 30 days ago, "To" defaults to today
   const [startDate, setStartDate] = useState<string>(() => dateString(30));
@@ -82,41 +75,80 @@ export default function ExportModal({
     return true;
   };
 
+  /** Build the shared filter options from the current modal state. */
+  const buildFilters = useCallback((): ExportFilterOptions => {
+    const filters: ExportFilterOptions = {};
+
+    if (startDate) {
+      filters.startDate = new Date(startDate).getTime() / 1000;
+    }
+    if (endDate) {
+      // Include the full end day by advancing to end-of-day
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      filters.endDate = end.getTime() / 1000;
+    }
+    if (selectedStatuses.length > 0) {
+      filters.statuses = selectedStatuses;
+    }
+    if (selectedAssets.length > 0) {
+      filters.assets = selectedAssets;
+    }
+
+    return filters;
+  }, [startDate, endDate, selectedStatuses, selectedAssets]);
+
   const handleExport = useCallback(async () => {
     if (!validateDateRange()) return;
 
     setIsExporting(true);
     setError(null);
+    setSuccess(null);
 
     try {
-      const filters: ExportFilterOptions = {};
+      const filters = buildFilters();
 
-      if (startDate) {
-        filters.startDate = new Date(startDate).getTime() / 1000;
-      }
-      if (endDate) {
-        // Include the full end day by advancing to end-of-day
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        filters.endDate = end.getTime() / 1000;
-      }
-      if (selectedStatuses.length > 0) {
-        filters.statuses = selectedStatuses;
-      }
-      if (selectedAssets.length > 0) {
-        filters.assets = selectedAssets;
-      }
+      // Build query params so the API route can also filter server-side
+      const params = new URLSearchParams();
+      if (startDate) params.set('from', startDate);
+      if (endDate) params.set('to', endDate);
 
-      const result = await exportPayments(invoices, filters, exportFormat);
-
-      // Record the export in history
-      addExportHistoryEntry({
-        format: exportFormat,
-        invoiceCount: result.invoiceCount,
-        filters,
-        filename: result.filename,
+      const response = await apiFetch(`/api/invoices/export?${params.toString()}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          invoices,
+          filters,
+        }),
       });
-      setHistory(getExportHistory());
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Export failed');
+      }
+
+      // Handle async export (202 Accepted)
+      if (response.status === 202) {
+        const jobData = await response.json();
+        setError(`Export queued as job ${jobData.jobId}. This will be processed in the background.`);
+        return;
+      }
+
+      // Handle synchronous export (200 OK)
+      const blob = await response.blob();
+      const filename = generateExportFilename('invoices');
+
+      // Download the file
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
 
       onExport?.();
       onClose();
@@ -126,7 +158,40 @@ export default function ExportModal({
       setIsExporting(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [invoices, startDate, endDate, selectedStatuses, selectedAssets, exportFormat, onExport, onClose]);
+  }, [invoices, buildFilters, startDate, endDate, onExport, onClose]);
+
+  /** Export the aging report (CSV or Excel) using the current filters. */
+  const handleExportAging = useCallback(
+    async (format: 'csv' | 'excel') => {
+      if (!validateDateRange()) return;
+
+      setIsExportingAging(true);
+      setError(null);
+      setSuccess(null);
+
+      try {
+        const filters = buildFilters();
+
+        if (format === 'csv') {
+          downloadAgingReportCsv(invoices, filters);
+        } else {
+          downloadAgingReportExcel(invoices, filters);
+        }
+
+        setSuccess(
+          `Aging report exported as ${generateAgingReportFilename(format)}.`
+        );
+        onExport?.();
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : 'Aging report export failed'
+        );
+      } finally {
+        setIsExportingAging(false);
+      }
+    },
+    [invoices, buildFilters, onExport]
+  );
 
   if (!isOpen) return null;
 
@@ -165,8 +230,20 @@ export default function ExportModal({
         {/* Content */}
         <div className="px-6 py-6 space-y-6">
           {error && (
-            <div className="p-4 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+            <div
+              role="alert"
+              className="p-4 bg-red-50 border border-red-200 rounded text-sm text-red-800"
+            >
               {error}
+            </div>
+          )}
+
+          {success && (
+            <div
+              role="status"
+              className="p-4 bg-green-50 border border-green-200 rounded text-sm text-green-800"
+            >
+              {success}
             </div>
           )}
 
@@ -230,27 +307,6 @@ export default function ExportModal({
             )}
           </div>
 
-          {/* Format Selector */}
-          <div>
-            <label
-              htmlFor="export-format"
-              className="block text-sm font-medium text-gray-700 mb-2"
-            >
-              Format
-            </label>
-            <select
-              id="export-format"
-              value={exportFormat}
-              onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
-              disabled={isExporting}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100"
-            >
-              <option value="csv">CSV</option>
-              <option value="json">JSON</option>
-              <option value="pdf">PDF</option>
-            </select>
-          </div>
-
           {/* Status Filter */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -293,46 +349,51 @@ export default function ExportModal({
             </div>
           </div>
 
-          {/* Export History */}
-          {history.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Recent Exports
-              </label>
-              <ul className="space-y-1 text-sm text-gray-600">
-                {history.slice(0, 5).map((entry) => (
-                  <li
-                    key={entry.id}
-                    className="flex justify-between gap-2 border-b border-gray-100 pb-1"
-                  >
-                    <span className="truncate">
-                      {entry.filename} ({entry.format.toUpperCase()})
-                    </span>
-                    <span className="text-xs text-gray-400 whitespace-nowrap">
-                      {new Date(entry.createdAt).toLocaleString()}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+          {/* Aging Report Export */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Aging Report
+            </label>
+            <p className="text-xs text-gray-500 mb-2">
+              Export invoice aging buckets, overdue rates and collection
+              efficiency for the selected date range and filters.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => handleExportAging('csv')}
+                disabled={isExporting || isExportingAging || invoices.length === 0}
+                className="flex-1 px-3 py-2 text-sm text-indigo-700 border border-indigo-300 rounded-lg hover:bg-indigo-50 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isExportingAging ? 'Exporting...' : 'Export Aging (CSV)'}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExportAging('excel')}
+                disabled={isExporting || isExportingAging || invoices.length === 0}
+                className="flex-1 px-3 py-2 text-sm text-indigo-700 border border-indigo-300 rounded-lg hover:bg-indigo-50 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isExportingAging ? 'Exporting...' : 'Export Aging (Excel)'}
+              </button>
             </div>
-          )}
+          </div>
         </div>
 
         {/* Footer */}
         <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-4">
           <button
             onClick={onClose}
-            disabled={isExporting}
+            disabled={isExporting || isExportingAging}
             className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Cancel
           </button>
           <button
             onClick={handleExport}
-            disabled={isExporting || invoices.length === 0}
+            disabled={isExporting || isExportingAging || invoices.length === 0}
             className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isExporting ? 'Exporting...' : `Export to ${exportFormat.toUpperCase()}`}
+            {isExporting ? 'Exporting...' : 'Export to Excel'}
           </button>
         </div>
       </div>

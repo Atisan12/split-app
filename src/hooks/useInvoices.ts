@@ -9,6 +9,7 @@ import {
   QuotaExceededCacheError,
 } from "@/lib/db/invoiceCache";
 import { useToast } from "@/contexts/ToastContext";
+import { trackEvent } from "@/lib/analytics";
 
 /**
  * Bundle/schedule linkage metadata for an invoice. These fields are optional
@@ -76,6 +77,9 @@ export function useInvoices(publicKey: string | null | undefined): UseInvoicesRe
       return;
     }
 
+    // Fire-and-forget: never await analytics so the data fetch is not delayed.
+    trackEvent("wallet_connected");
+
     setLoading(true);
     setRefreshing(true);
 
@@ -97,6 +101,22 @@ export function useInvoices(publicKey: string | null | undefined): UseInvoicesRe
         const linked = data.invoices.map(toLinkedInvoice);
         setInvoices(linked);
         setError(null);
+
+        // Fire-and-forget analytics with non-identifying custom properties.
+        const statusBreakdown: Record<string, number> = {};
+        for (const invoice of data.invoices) {
+          const status = String(invoice.status ?? "unknown");
+          statusBreakdown[status] = (statusBreakdown[status] ?? 0) + 1;
+        }
+        trackEvent("invoice_list_viewed", {
+          count: data.invoices.length,
+          statusBreakdown,
+        });
+        for (const invoice of data.invoices) {
+          trackEvent("invoice_created", {
+            status: String(invoice.status ?? "unknown"),
+          });
+        }
         try {
           await putCachedInvoices(publicKey, data.invoices);
         } catch (err) {

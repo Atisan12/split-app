@@ -16,145 +16,80 @@ export const RPC_URL =
 export const contractId = process.env.NEXT_PUBLIC_CONTRACT_ID ?? "";
 
 /**
- * Feature flag value.
- * - `boolean`: simple on/off flag.
- * - `number` (0-100): percentage-based gradual rollout.
- * - `object`: advanced flag with optional percentage rollout and explicit allow/deny lists.
- */
-export type FeatureFlagValue =
-  | boolean
-  | number
-  | {
-      enabled?: boolean;
-      /** Percentage (0-100) of users for whom the flag is enabled. */
-      percentage?: number;
-      /** User ids that always see the flag enabled. */
-      allowlist?: string[];
-      /** User ids that never see the flag enabled. */
-      denylist?: string[];
-    };
-
-export type FeatureFlags = Record<string, FeatureFlagValue>;
-
-/** Context used to evaluate a feature flag for a given user/session. */
-export interface FlagContext {
-  /** Stable identifier for the user (used for percentage rollout bucketing). */
-  userId?: string;
-  /** Optional arbitrary attributes for future targeting rules. */
-  attributes?: Record<string, string | number | boolean>;
-}
-
-/** Default flags used when no override is provided via env. */
-export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
-  /** Example: gradual rollout of a new dashboard. */
-  newDashboard: { enabled: true, percentage: 0 },
-  /** Example: A/B test for the split creation flow. */
-  splitCreationV2: { enabled: true, percentage: 10 },
-  /** Example: analytics instrumentation toggle. */
-  analytics: true,
-};
-
-/**
- * Parse a JSON feature flag map from an env string.
- * Returns `null` when the input is missing or invalid so callers can fall back to defaults.
- */
-function parseFeatureFlags(raw: string | undefined): FeatureFlags | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as FeatureFlags;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Feature flags resolved from `NEXT_PUBLIC_FEATURE_FLAGS` (JSON), merged over defaults.
- * Env-provided flags override matching default keys.
- */
-export const FEATURE_FLAGS: FeatureFlags = {
-  ...DEFAULT_FEATURE_FLAGS,
-  ...(parseFeatureFlags(process.env.NEXT_PUBLIC_FEATURE_FLAGS) ?? {}),
-};
-
-/**
- * Stable, deterministic 32-bit hash of a string (FNV-1a).
- * Used to bucket users for percentage-based rollouts so the same user
- * consistently receives the same flag evaluation.
- */
-export function stableHash(input: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  // Convert to unsigned 32-bit integer.
-  return hash >>> 0;
-}
-
-/** Map a user id to a bucket in the range [0, 100). */
-function bucketFor(userId: string, key: string): number {
-  // Include the flag key so different flags bucket users independently.
-  return stableHash(`${key}:${userId}`) % 100;
-}
-
-/**
- * Evaluate a feature flag.
+ * Analytics configuration.
  *
- * @param key     Flag name.
- * @param context Optional evaluation context (userId enables percentage rollout).
- * @returns `true` when the flag is enabled for the given context.
+ * Env vars:
+ *   NEXT_PUBLIC_ANALYTICS_ENABLED  - "true" to enable client-side analytics
+ *   NEXT_PUBLIC_ANALYTICS_PROVIDER - provider name (e.g. "posthog", "plausible")
+ *   NEXT_PUBLIC_ANALYTICS_ENDPOINT - ingestion / API endpoint for the provider
+ *   NEXT_PUBLIC_ANALYTICS_SAMPLE_RATE - sampling rate in [0, 1] (default 1)
  */
-export function isFlagEnabled(key: string, context?: FlagContext): boolean {
-  const flag = FEATURE_FLAGS[key];
-  if (flag === undefined) return false;
+export const ANALYTICS_ENABLED =
+  process.env.NEXT_PUBLIC_ANALYTICS_ENABLED === "true";
 
-  // Simple boolean flag.
-  if (typeof flag === "boolean") return flag;
+export const ANALYTICS_PROVIDER =
+  process.env.NEXT_PUBLIC_ANALYTICS_PROVIDER ?? "posthog";
 
-  // Percentage-only flag.
-  if (typeof flag === "number") {
-    return evaluatePercentage(flag, key, context);
-  }
+export const ANALYTICS_ENDPOINT =
+  process.env.NEXT_PUBLIC_ANALYTICS_ENDPOINT ?? "";
 
-  // Advanced object flag.
-  const userId = context?.userId;
-
-  if (userId && flag.denylist?.includes(userId)) return false;
-  if (userId && flag.allowlist?.includes(userId)) return true;
-
-  if (flag.enabled === false) return false;
-
-  if (typeof flag.percentage === "number") {
-    return evaluatePercentage(flag.percentage, key, context);
-  }
-
-  return flag.enabled ?? false;
+function parseSampleRate(raw: string | undefined): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(1, Math.max(0, parsed));
 }
 
-function evaluatePercentage(
-  percentage: number,
-  key: string,
-  context?: FlagContext,
-): boolean {
-  if (percentage <= 0) return false;
-  if (percentage >= 100) return true;
+export const ANALYTICS_SAMPLE_RATE = parseSampleRate(
+  process.env.NEXT_PUBLIC_ANALYTICS_SAMPLE_RATE,
+);
 
-  const userId = context?.userId;
-  // Without a stable user id we cannot bucket deterministically; default to off.
-  if (!userId) return false;
+export const analyticsConfig = {
+  enabled: ANALYTICS_ENABLED,
+  provider: ANALYTICS_PROVIDER,
+  endpoint: ANALYTICS_ENDPOINT,
+  sampleRate: ANALYTICS_SAMPLE_RATE,
+} as const;
 
-  return bucketFor(userId, key) < percentage;
+/**
+ * Backup / disaster-recovery configuration.
+ *
+ * Env vars:
+ *   NEXT_PUBLIC_BACKUP_BUCKET          - object storage bucket for backups
+ *   NEXT_PUBLIC_BACKUP_GEO_REGION      - geo-replica region for redundancy
+ *   NEXT_PUBLIC_BACKUP_INTERVAL_MINUTES - backup schedule interval in minutes
+ *   NEXT_PUBLIC_BACKUP_ALERT_WEBHOOK   - webhook URL alerted on backup failure
+ */
+export const BACKUP_BUCKET = process.env.NEXT_PUBLIC_BACKUP_BUCKET ?? "";
+
+export const BACKUP_GEO_REGION =
+  process.env.NEXT_PUBLIC_BACKUP_GEO_REGION ?? "";
+
+function parseIntervalMinutes(raw: string | undefined): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 60;
+  return Math.floor(parsed);
 }
+
+export const BACKUP_INTERVAL_MINUTES = parseIntervalMinutes(
+  process.env.NEXT_PUBLIC_BACKUP_INTERVAL_MINUTES,
+);
+
+export const BACKUP_ALERT_WEBHOOK =
+  process.env.NEXT_PUBLIC_BACKUP_ALERT_WEBHOOK ?? "";
+
+export const backupConfig = {
+  bucket: BACKUP_BUCKET,
+  geoRegion: BACKUP_GEO_REGION,
+  intervalMinutes: BACKUP_INTERVAL_MINUTES,
+  alertWebhook: BACKUP_ALERT_WEBHOOK,
+} as const;
 
 export const config = {
   network: STELLAR_NETWORK,
   rpcUrl: RPC_URL,
   contractId,
-  featureFlags: FEATURE_FLAGS,
+  analytics: analyticsConfig,
+  backup: backupConfig,
 } as const;
 
 export default config;

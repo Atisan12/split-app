@@ -1,25 +1,36 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useCallback, useMemo, useEffect, useRef, memo } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import type { Invoice } from "@stellar-split/sdk";
 import { formatAmount } from "@stellar-split/sdk";
 import { getInvoiceDisplayStatus } from "@/lib/dashboardFilters";
+import {
+  AGING_BUCKETS,
+  getAgingBucket,
+  getDaysOverdue,
+  type AgingBucketKey,
+} from "@/lib/invoiceAging";
 
 // ── Column definitions ────────────────────────────────────────────────────────
 
-export type SortColumn = "id" | "amount" | "status" | "deadline" | "funded";
+export type SortColumn = "id" | "amount" | "status" | "deadline" | "funded" | "aging";
 
-type ColumnKey = "id" | "status" | "amount" | "funded" | "deadline" | "tags" | "recipients";
+type ColumnKey = "id" | "status" | "amount" | "funded" | "deadline" | "aging" | "tags" | "recipients";
 
 const DEFAULT_COLUMNS: Record<ColumnKey, boolean> = {
-  id: true, status: true, amount: true, funded: true, deadline: true, tags: true, recipients: true,
+  id: true, status: true, amount: true, funded: true, deadline: true, aging: false, tags: true, recipients: true,
 };
 
 const COLUMN_LABELS: Record<ColumnKey, string> = {
   id: "ID", status: "Status", amount: "Amount", funded: "Funded",
-  deadline: "Deadline", tags: "Tags", recipients: "Recipients",
+  deadline: "Deadline", aging: "Aging", tags: "Tags", recipients: "Recipients",
 };
+
+const BUCKET_ORDER: Record<AgingBucketKey, number> = AGING_BUCKETS.reduce(
+  (acc, b, i) => ({ ...acc, [b.key]: i }),
+  {} as Record<AgingBucketKey, number>,
+);
 export type SortDir = "asc" | "desc";
 
 export interface InvoiceTableSortState {
@@ -74,6 +85,15 @@ function sortInvoices(
       });
     case "deadline":
       return list.sort((a, b) => mul * (a.deadline - b.deadline));
+    case "aging": {
+      const now = Math.floor(Date.now() / 1000);
+      return list.sort((a, b) => {
+        const ba = BUCKET_ORDER[getAgingBucket(a, now)];
+        const bb = BUCKET_ORDER[getAgingBucket(b, now)];
+        if (ba !== bb) return mul * (ba - bb);
+        return mul * (getDaysOverdue(a, now) - getDaysOverdue(b, now));
+      });
+    }
     case "status": {
       const now = Math.floor(Date.now() / 1000);
       return list.sort(
@@ -100,13 +120,7 @@ const STATUS_STYLES: Record<string, string> = {
   Refunded: "bg-gray-500/20 text-gray-400",
 };
 
-// Rendered once per row (potentially hundreds of rows). Its only prop is a
-// primitive status string, so React.memo's default shallow comparison lets
-// unaffected rows skip re-rendering this chip when the table re-renders for
-// an unrelated reason (sort change, selection toggle on another row, column
-// visibility toggle, etc.) — those re-render the parent row but this
-// specific status string is almost always unchanged.
-const StatusChip = memo(function StatusChip({ status }: { status: string }) {
+function StatusChip({ status }: { status: string }) {
   const style = STATUS_STYLES[status] ?? "bg-gray-500/20 text-gray-400";
   return (
     <span
@@ -116,7 +130,7 @@ const StatusChip = memo(function StatusChip({ status }: { status: string }) {
       {status}
     </span>
   );
-});
+}
 
 // ── Sort header button ────────────────────────────────────────────────────────
 
@@ -173,26 +187,8 @@ interface InvoiceTableProps {
   onSort?: (sort: InvoiceTableSortState) => void;
   /** Content to render in each row's action column */
   rowAction?: (inv: Invoice) => React.ReactNode;
-  /** Optional map of invoice id → bundle id, used to show bundle membership badges */
-  bundleByInvoice?: Record<string, string>;
-  /** Called with the selected invoice ids when the user clicks "Create bundle" */
-  onCreateBundle?: (invoiceIds: string[]) => void;
-}
-
-// ── Bundle selection helpers ──────────────────────────────────────────────────
-
-/** An invoice can only be bundled while it is still collecting funds. */
-function isBundleEligible(inv: Invoice, now: number): boolean {
-  const status = getInvoiceDisplayStatus(inv, now);
-  return status === "Pending" || status === "Partial" || status === "Funded";
-}
-
-function bundleIneligibilityReason(inv: Invoice, now: number): string {
-  const status = getInvoiceDisplayStatus(inv, now);
-  if (status === "Expired") return "Expired invoices cannot be bundled";
-  if (status === "Released") return "Released invoices cannot be bundled";
-  if (status === "Refunded") return "Refunded invoices cannot be bundled";
-  return `Invoices with status "${status}" cannot be bundled`;
+  /** When set, only invoices in this aging bucket are shown */
+  agingFilter?: AgingBucketKey | null;
 }
 
 /**
@@ -210,14 +206,10 @@ export default function InvoiceTable({
   sort: externalSort,
   onSort: externalOnSort,
   rowAction,
-  bundleByInvoice = {},
-  onCreateBundle,
+  agingFilter = null,
 }: InvoiceTableProps) {
   const [internalSort, setInternalSort] =
     useState<InvoiceTableSortState>(DEFAULT_SORT);
-
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
-  const [selectionError, setSelectionError] = useState<string | null>(null);
 
   const [colVisible, setColVisible] = useState<Record<ColumnKey, boolean>>(() => {
     try {
@@ -270,67 +262,17 @@ export default function InvoiceTable({
     [sort, externalOnSort],
   );
 
-  const sorted = useMemo(() => sortInvoices(invoices, sort), [invoices, sort]);
-
   const now = Math.floor(Date.now() / 1000);
 
-  // Drop selections for invoices that are no longer present in the list.
-  useEffect(() => {
-    setSelectedIds((prev) => {
-      if (prev.size === 0) return prev;
-      const present = new Set(invoices.map((inv) => inv.id));
-      let changed = false;
-      const next = new Set<string>();
-      prev.forEach((id) => {
-        if (present.has(id)) next.add(id);
-        else changed = true;
-      });
-      return changed ? next : prev;
-    });
-  }, [invoices]);
-
-  const toggleSelected = useCallback(
-    (inv: Invoice) => {
-      if (!isBundleEligible(inv, now)) {
-        setSelectionError(bundleIneligibilityReason(inv, now));
-        return;
-      }
-      setSelectionError(null);
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(inv.id)) next.delete(inv.id);
-        else next.add(inv.id);
-        return next;
-      });
-    },
-    [now],
+  const filtered = useMemo(
+    () =>
+      agingFilter
+        ? invoices.filter((inv) => getAgingBucket(inv, now) === agingFilter)
+        : invoices,
+    [invoices, agingFilter, now],
   );
 
-  const selectedInvoices = useMemo(
-    () => invoices.filter((inv) => selectedIds.has(inv.id)),
-    [invoices, selectedIds],
-  );
-
-  const selectedTotal = useMemo(
-    () => selectedInvoices.reduce((s, inv) => s + totalAmount(inv), 0n),
-    [selectedInvoices],
-  );
-
-  const handleCreateBundle = useCallback(() => {
-    if (selectedIds.size < 2) {
-      setSelectionError("Select at least two invoices to create a bundle.");
-      return;
-    }
-    const ineligible = selectedInvoices.filter((inv) => !isBundleEligible(inv, now));
-    if (ineligible.length > 0) {
-      setSelectionError(
-        `${ineligible.length} selected invoice${ineligible.length === 1 ? "" : "s"} can no longer be bundled.`,
-      );
-      return;
-    }
-    setSelectionError(null);
-    onCreateBundle?.(Array.from(selectedIds));
-  }, [selectedIds, selectedInvoices, now, onCreateBundle]);
+  const sorted = useMemo(() => sortInvoices(filtered, sort), [filtered, sort]);
 
   if (invoices.length === 0) {
     return (
@@ -342,45 +284,8 @@ export default function InvoiceTable({
 
   return (
     <div>
-      {/* Bundle selection toolbar + column settings dropdown */}
-      <div className="flex items-center justify-between gap-3 mb-2">
-        <div className="flex flex-wrap items-center gap-2 min-h-[32px]">
-          {onCreateBundle && (
-            <>
-              <span className="text-xs text-gray-400" aria-live="polite">
-                {selectedIds.size === 0
-                  ? "Select invoices to bundle"
-                  : `${selectedIds.size} selected · ${formatAmount(selectedTotal)} USDC`}
-              </span>
-              {selectedIds.size > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedIds(new Set());
-                    setSelectionError(null);
-                  }}
-                  className="text-xs text-gray-400 hover:text-gray-200 underline focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
-                >
-                  Clear
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={handleCreateBundle}
-                disabled={selectedIds.size < 2}
-                className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-              >
-                Create bundle
-              </button>
-            </>
-          )}
-          {selectionError && (
-            <span role="alert" className="text-xs text-red-400">
-              {selectionError}
-            </span>
-          )}
-        </div>
-        <div className="relative">
+      {/* Gear button + column settings dropdown */}
+      <div className="flex justify-end mb-2">
         <div className="relative">
           <button
             ref={gearRef}
@@ -423,11 +328,6 @@ export default function InvoiceTable({
         >
           <thead className="bg-gray-100 dark:bg-gray-800/80">
             <tr>
-              {onCreateBundle && (
-                <th scope="col" className="w-10 px-4 py-3">
-                  <span className="sr-only">Select</span>
-                </th>
-              )}
               {colVisible.id && (
                 <SortHeader column="id" label="ID" sort={sort} onSort={handleSort} className="w-28" />
               )}
@@ -442,6 +342,9 @@ export default function InvoiceTable({
               )}
               {colVisible.deadline && (
                 <SortHeader column="deadline" label="Deadline" sort={sort} onSort={handleSort} className="w-36" />
+              )}
+              {colVisible.aging && (
+                <SortHeader column="aging" label="Aging" sort={sort} onSort={handleSort} className="w-32" />
               )}
               {colVisible.tags && (
                 <th scope="col" className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -468,52 +371,21 @@ export default function InvoiceTable({
               const { text: dlText, urgent: dlUrgent } = deadlineRelative(inv.deadline);
               const displayNum = displayNumbers[inv.id] ?? inv.id;
               const tags = tagsByInvoice[inv.id] ?? [];
-              const bundleId = bundleByInvoice[inv.id];
-              const eligible = isBundleEligible(inv, now);
-              const selected = selectedIds.has(inv.id);
 
               return (
                 <tr
                   key={inv.id}
-                  className={[
-                    "group transition-colors",
-                    selected
-                      ? "bg-indigo-50 dark:bg-indigo-900/20"
-                      : "bg-white dark:bg-transparent hover:bg-gray-50 dark:hover:bg-gray-800/50",
-                  ].join(" ")}
+                  className="group bg-white dark:bg-transparent hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
                 >
-                  {onCreateBundle && (
-                    <td className="px-4 py-3">
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        disabled={!eligible}
-                        onChange={() => toggleSelected(inv)}
-                        aria-label={`Select invoice ${displayNum} for bundling`}
-                        title={eligible ? undefined : bundleIneligibilityReason(inv, now)}
-                        className="h-4 w-4 rounded border-gray-600 bg-gray-800 text-indigo-600 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
-                      />
-                    </td>
-                  )}
                   {colVisible.id && (
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <Link
-                          href={`/invoice/${inv.id}`}
-                          className="font-mono text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
-                          aria-label={`View invoice ${displayNum}`}
-                        >
-                          {displayNum}
-                        </Link>
-                        {bundleId && (
-                          <span
-                            className="inline-block rounded-full bg-purple-900/50 border border-purple-700/40 px-1.5 py-0 text-[10px] text-purple-300"
-                            title={`In bundle ${bundleId}`}
-                          >
-                            Bundle {bundleId}
-                          </span>
-                        )}
-                      </div>
+                      <Link
+                        href={`/invoice/${inv.id}`}
+                        className="font-mono text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
+                        aria-label={`View invoice ${displayNum}`}
+                      >
+                        {displayNum}
+                      </Link>
                     </td>
                   )}
 
@@ -577,6 +449,27 @@ export default function InvoiceTable({
                       )}
                     </td>
                   )}
+
+                  {colVisible.aging && (() => {
+                    const bucket = getAgingBucket(inv, now);
+                    const days = getDaysOverdue(inv, now);
+                    const meta = AGING_BUCKETS.find((b) => b.key === bucket);
+                    return (
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col gap-0.5">
+                          <span
+                            className={`inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${meta?.className ?? "bg-gray-500/20 text-gray-400"}`}
+                            aria-label={`Aging bucket: ${meta?.label ?? bucket}`}
+                          >
+                            {meta?.label ?? bucket}
+                          </span>
+                          {days > 0 && (
+                            <span className="text-[11px] text-amber-400">{days}d overdue</span>
+                          )}
+                        </div>
+                      </td>
+                    );
+                  })()}
 
                   {colVisible.tags && (
                     <td className="px-4 py-3">

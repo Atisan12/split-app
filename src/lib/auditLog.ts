@@ -31,6 +31,55 @@ export function filterAuditEntries(entries: AuditEntry[], filter: AuditFilter = 
     .sort((a, b) => b.timestamp - a.timestamp);
 }
 
+export interface InvoiceAmendmentAuditInput {
+  id: string;
+  timestamp?: number;
+  actor: string;
+  invoiceId: string;
+  reason: string;
+  changedFields: string[];
+  comment?: string;
+  version?: number;
+}
+
+export function createInvoiceAmendmentAuditEntry(input: InvoiceAmendmentAuditInput): AuditEntry {
+  const parts: string[] = [`Reason: ${input.reason}`];
+  if (input.changedFields.length > 0) {
+    parts.push(`Changed fields: ${input.changedFields.join(", ")}`);
+  }
+  if (input.version !== undefined) {
+    parts.push(`Version: ${input.version}`);
+  }
+  if (input.comment) {
+    parts.push(`Comment: ${input.comment}`);
+  }
+  return {
+    id: input.id,
+    timestamp: input.timestamp ?? Date.now(),
+    actor: input.actor,
+    action: "invoice_amended",
+    category: "invoice",
+    target: input.invoiceId,
+    details: parts.join(" | "),
+  };
+}
+
+export function appendInvoiceAmendmentAuditEntry(
+  entries: AuditEntry[],
+  input: InvoiceAmendmentAuditInput,
+): AuditEntry[] {
+  return [...entries, createInvoiceAmendmentAuditEntry(input)];
+}
+
+export function filterAuditEntriesByInvoice(
+  entries: AuditEntry[],
+  invoiceId: string,
+): AuditEntry[] {
+  return entries
+    .filter((e) => e.category === "invoice" && e.target === invoiceId)
+    .sort((a, b) => b.timestamp - a.timestamp);
+}
+
 function csvCell(value: string): string {
   return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }

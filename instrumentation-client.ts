@@ -2,89 +2,6 @@ import * as Sentry from "@sentry/nextjs";
 
 const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
 
-/**
- * Keys that may contain personally identifiable information.
- * These are scrubbed from event payloads before they are sent to Sentry.
- */
-const PII_KEYS = [
-  "email",
-  "phone",
-  "name",
-  "firstName",
-  "lastName",
-  "address",
-  "ip",
-  "ipAddress",
-  "wallet",
-  "walletAddress",
-  "publicKey",
-  "privateKey",
-  "secret",
-  "password",
-  "token",
-  "authorization",
-  "cookie",
-];
-
-const REDACTED = "[REDACTED]";
-
-function scrubValue(value: unknown, depth = 0): unknown {
-  if (depth > 8 || value == null) {
-    return value;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item) => scrubValue(item, depth + 1));
-  }
-
-  if (typeof value === "object") {
-    const result: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      if (PII_KEYS.some((piiKey) => key.toLowerCase() === piiKey.toLowerCase())) {
-        result[key] = REDACTED;
-      } else {
-        result[key] = scrubValue(val, depth + 1);
-      }
-    }
-    return result;
-  }
-
-  return value;
-}
-
-function scrubEvent(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
-  if (event.user) {
-    // Only keep the hashed wallet identifier; drop everything else.
-    event.user = event.user.id ? { id: event.user.id } : {};
-  }
-
-  if (event.request) {
-    delete event.request.cookies;
-    delete event.request.headers;
-    delete event.request.data;
-    delete event.request.query_string;
-  }
-
-  if (event.extra) {
-    event.extra = scrubValue(event.extra) as Record<string, unknown>;
-  }
-
-  if (event.contexts) {
-    event.contexts = scrubValue(event.contexts) as typeof event.contexts;
-  }
-
-  if (event.breadcrumbs) {
-    event.breadcrumbs = event.breadcrumbs.map((breadcrumb) => ({
-      ...breadcrumb,
-      data: breadcrumb.data
-        ? (scrubValue(breadcrumb.data) as Record<string, unknown>)
-        : breadcrumb.data,
-    }));
-  }
-
-  return event;
-}
-
 if (dsn) {
   Sentry.init({
     dsn,
@@ -92,37 +9,182 @@ if (dsn) {
     debug: false,
     replaysOnErrorSampleRate: 1.0,
     replaysSessionSampleRate: 0.0,
-    integrations: [
-      Sentry.browserTracingIntegration(),
-      Sentry.replayIntegration({
-        maskAllText: true,
-        blockAllMedia: true,
-      }),
-    ],
-    beforeSend(event) {
-      return scrubEvent(event);
-    },
-    beforeSendTransaction(event) {
-      return scrubEvent(event);
-    },
   });
 }
 
-/**
- * Associates the current Sentry scope with a hashed wallet identifier.
- * The raw wallet address must never be passed here; callers are expected
- * to provide a one-way hash so no PII leaves the client.
- */
-export function setUser(hashedWalletId: string | null): void {
-  if (!dsn) {
-    return;
-  }
+export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;
 
-  if (hashedWalletId) {
-    Sentry.setUser({ id: hashedWalletId });
-  } else {
-    Sentry.setUser(null);
+/**
+ * Analytics consent state.
+ * Analytics must never run unless the user has explicitly granted consent.
+ */
+const ANALYTICS_CONSENT_KEY = "analytics-consent";
+
+type AnalyticsConsent = "granted" | "denied" | "unknown";
+
+function readConsent(): AnalyticsConsent {
+  if (typeof window === "undefined") return "unknown";
+  try {
+    const value = window.localStorage.getItem(ANALYTICS_CONSENT_KEY);
+    if (value === "granted" || value === "denied") return value;
+    return "unknown";
+  } catch {
+    // localStorage may be unavailable (e.g. privacy mode); treat as no consent.
+    return "unknown";
   }
 }
 
-export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;
+function hasConsent(): boolean {
+  return readConsent() === "granted";
+}
+
+/**
+ * Minimal analytics client interface. The concrete provider is initialized
+ * lazily and only after consent is granted.
+ */
+interface AnalyticsClient {
+  init: (options: { dsn?: string; sampleRate?: number }) => void;
+  track: (event: string, properties?: Record<string, unknown>) => void;
+  flush: () => void;
+}
+
+let analyticsClient: AnalyticsClient | null = null;
+let analyticsInitialized = false;
+let flushHandlerAttached = false;
+
+/**
+ * Queue of events captured before the provider finished initializing.
+ * Kept small and bounded to avoid unbounded memory growth.
+ */
+const MAX_QUEUE_SIZE = 100;
+const eventQueue: Array<{ event: string; properties?: Record<string, unknown> }> = [];
+
+function enqueue(event: string, properties?: Record<string, unknown>): void {
+  if (eventQueue.length >= MAX_QUEUE_SIZE) {
+    eventQueue.shift();
+  }
+  eventQueue.push({ event, properties });
+}
+
+function drainQueue(client: AnalyticsClient): void {
+  while (eventQueue.length > 0) {
+    const item = eventQueue.shift();
+    if (item) {
+      try {
+        client.track(item.event, item.properties);
+      } catch {
+        // Never let analytics failures break the app.
+      }
+    }
+  }
+}
+
+/**
+ * Lazily load and initialize the analytics provider. This is intentionally
+ * non-blocking: it is scheduled on an idle callback (or a microtask fallback)
+ * so it never impacts initial page performance.
+ */
+function initAnalytics(): void {
+  if (typeof window === "undefined") return;
+  if (analyticsInitialized) return;
+  if (!hasConsent()) return;
+
+  analyticsInitialized = true;
+
+  const start = () => {
+    // Re-check consent in case it was revoked before the idle callback ran.
+    if (!hasConsent()) {
+      analyticsInitialized = false;
+      return;
+    }
+
+    import("./analytics-client")
+      .then((mod) => {
+        const client = mod.createAnalyticsClient();
+        analyticsClient = client;
+        client.init({
+          dsn: process.env.NEXT_PUBLIC_ANALYTICS_DSN,
+          sampleRate: 1.0,
+        });
+        drainQueue(client);
+      })
+      .catch(() => {
+        // Provider failed to load; reset so a later attempt can retry.
+        analyticsInitialized = false;
+      });
+  };
+
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(start, { timeout: 2000 });
+  } else {
+    window.setTimeout(start, 0);
+  }
+}
+
+/**
+ * Track a user action. No-op unless consent has been granted.
+ * Safe to call from anywhere in the client bundle.
+ */
+export function trackEvent(
+  event: string,
+  properties?: Record<string, unknown>,
+): void {
+  if (typeof window === "undefined") return;
+  if (!hasConsent()) return;
+
+  if (analyticsClient) {
+    try {
+      analyticsClient.track(event, properties);
+    } catch {
+      // Swallow analytics errors.
+    }
+    return;
+  }
+
+  enqueue(event, properties);
+  // Ensure the provider is (or will be) initialized.
+  initAnalytics();
+}
+
+/**
+ * Flush any queued events. Intended to be called on page hide / unload so
+ * events are not lost. Uses `visibilitychange` + `pagehide` for reliability
+ * across browsers (including bfcache).
+ */
+export function flushAnalytics(): void {
+  if (typeof window === "undefined") return;
+  if (!hasConsent()) return;
+
+  if (analyticsClient) {
+    try {
+      analyticsClient.flush();
+    } catch {
+      // Swallow analytics errors.
+    }
+  }
+}
+
+function attachFlushHandler(): void {
+  if (typeof window === "undefined") return;
+  if (flushHandlerAttached) return;
+  flushHandlerAttached = true;
+
+  const onPageHide = () => {
+    flushAnalytics();
+  };
+
+  const onVisibilityChange = () => {
+    if (document.visibilityState === "hidden") {
+      flushAnalytics();
+    }
+  };
+
+  window.addEventListener("pagehide", onPageHide);
+  window.addEventListener("visibilitychange", onVisibilityChange);
+}
+
+// Initialize analytics on the client, gated by consent and non-blocking.
+if (typeof window !== "undefined") {
+  attachFlushHandler();
+  initAnalytics();
+}
