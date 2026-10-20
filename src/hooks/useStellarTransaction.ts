@@ -2,11 +2,10 @@
 
 import { useCallback, useRef, useState } from "react";
 import { signTransaction, NETWORK_PASSPHRASE } from "@/lib/freighter";
-import { classifyError, AppError } from "@/lib/errors";
+import { signWithLedger, isLedgerError } from "@/lib/ledger";
+import { classifyError } from "@/lib/errors";
 import { useToast } from "@/contexts/ToastContext";
-import { retryWithBackoff, isRetryableError } from "@/lib/retry";
-import { recordRetryMetric } from "@/lib/retryMetrics";
-import { enqueueTransaction } from "@/lib/offlineQueue";
+import { useWallet } from "@/contexts/WalletContext";
 
 const HORIZON_URL =
   process.env.NEXT_PUBLIC_HORIZON_URL ??
@@ -44,6 +43,15 @@ function isUserRejection(error: unknown): boolean {
 }
 
 /**
+ * Ledger reports a declined signature with its own status codes rather than
+ * the Freighter wording, so check both shapes.
+ */
+function isLedgerRejection(error: unknown): boolean {
+  if (!isLedgerError(error)) return false;
+  return error.code === "user_rejected" || error.code === "denied";
+}
+
+/**
  * Sign a transaction with the connected wallet, submit it to Horizon, and
  * surface the outcome as a toast.
  *
@@ -53,6 +61,7 @@ function isUserRejection(error: unknown): boolean {
  */
 export function useStellarTransaction() {
   const toast = useToast();
+  const { activeWallet } = useWallet();
   const [status, setStatus] = useState<TransactionStatus>("idle");
   const [txHash, setTxHash] = useState<string | null>(null);
   // Guards against a double-submit from an impatient second click.
@@ -70,10 +79,22 @@ export function useStellarTransaction() {
       try {
         let signedXdr: string;
         try {
-          signedXdr = await signTransaction(unsignedXdr);
+          if (activeWallet === "ledger") {
+            // signWithLedger displays the transaction on the device and waits
+            // for the user to confirm before returning the signed envelope.
+            signedXdr = await signWithLedger(unsignedXdr);
+          } else {
+            signedXdr = await signTransaction(unsignedXdr);
+          }
         } catch (err) {
-          if (isUserRejection(err)) {
+          if (isUserRejection(err) || isLedgerRejection(err)) {
             toast.error("Transaction rejected in your wallet.");
+            setStatus("error");
+            throw err;
+          }
+          if (isLedgerError(err)) {
+            // Connection/transport failures get a Ledger-specific message.
+            toast.error(err.message);
             setStatus("error");
             throw err;
           }
@@ -86,31 +107,12 @@ export function useStellarTransaction() {
         const server = new Horizon.Server(HORIZON_URL);
         const tx = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
 
-        const onRetry = (attempt: number, error: unknown) => {
-          recordRetryMetric({ operation: "submitTransaction", attempt, error });
-          toast.info(
-            `Network hiccup — retrying transaction (attempt ${attempt})…`
-          );
-        };
-
-        const submitted = await retryWithBackoff(
-          () => server.submitTransaction(tx),
-          { onRetry }
-        );
+        const submitted = await server.submitTransaction(tx);
         const hash = submitted.hash;
 
-        const confirmed = await retryWithBackoff(
-          () => pollForConfirmation(server, hash),
-          { onRetry: (attempt, error) => {
-            recordRetryMetric({ operation: "pollForConfirmation", attempt, error });
-            toast.info(`Still confirming — retrying (attempt ${attempt})…`);
-          } }
-        );
+        const confirmed = await pollForConfirmation(server, hash);
         if (!confirmed) {
-          throw new AppError(
-            "Transaction did not confirm before timing out.",
-            "TIMEOUT"
-          );
+          throw new Error("Transaction did not confirm before timing out.");
         }
 
         setTxHash(hash);
@@ -119,28 +121,17 @@ export function useStellarTransaction() {
         return { txHash: hash };
       } catch (err) {
         setStatus("error");
-        // A user rejection already produced its own toast above.
-        if (!isUserRejection(err)) {
-          if (isRetryableError(err)) {
-            // Persistent network failure — queue for retry on reconnect.
-            try {
-              await enqueueTransaction(unsignedXdr, options);
-              toast.info(
-                "You appear to be offline. The transaction has been queued and will be retried when your connection is restored."
-              );
-            } catch {
-              toast.error(options.errorMessage ?? describeFailure(err));
-            }
-          } else {
-            toast.error(options.errorMessage ?? describeFailure(err));
-          }
+        // A user rejection or Ledger transport error already produced its own
+        // toast above.
+        if (!isUserRejection(err) && !isLedgerError(err)) {
+          toast.error(options.errorMessage ?? describeFailure(err));
         }
         throw err;
       } finally {
         inFlight.current = false;
       }
     },
-    [toast]
+    [toast, activeWallet]
   );
 
   const reset = useCallback(() => {
@@ -184,9 +175,6 @@ async function pollForConfirmation(
 
 /** Turn a Horizon or SDK error into something a user can act on. */
 function describeFailure(error: unknown): string {
-  if (error instanceof AppError) {
-    return error.message;
-  }
   const horizonResult = (error as { response?: { data?: { extras?: { result_codes?: { transaction?: string } } } } })
     ?.response?.data?.extras?.result_codes?.transaction;
 

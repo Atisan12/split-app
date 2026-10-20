@@ -44,6 +44,25 @@ export async function showInvoiceNotification(
   }
 }
 
+export async function showSubscriptionNotification(
+  subscriptionId: string,
+  title: string,
+  message: string
+): Promise<boolean> {
+  if (!("serviceWorker" in navigator) || !("Notification" in window)) return false;
+  if (Notification.permission !== "granted") return false;
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    await registration.showNotification(title, {
+      body: message,
+      data: { subscriptionId, url: `/subscriptions/${subscriptionId}` },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isPushNotificationsEnabled(): boolean {
   if (typeof window === "undefined") return false;
   return localStorage.getItem("push_subscribed") === "true";

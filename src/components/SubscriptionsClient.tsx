@@ -7,6 +7,8 @@ import { splitClient } from "@/lib/stellar";
 import { getFreighterPublicKey } from "@/lib/freighter";
 import { SubscriptionListSkeleton } from "@/components/Skeleton";
 import SubscriptionCard from "@/components/SubscriptionCard";
+import CancelModal from "@/components/CancelModal";
+import SubscriptionModifyModal from "@/components/SubscriptionModifyModal";
 import type { Subscription, SubscriptionStatus } from "@/types/subscription";
 import {
   loadSubscriptions,
@@ -14,7 +16,14 @@ import {
   pauseSubscription,
   resumeSubscription,
   cancelSubscription,
+  modifySubscription,
 } from "@/lib/subscriptions";
+import {
+  notifySubscriptionPaused,
+  notifySubscriptionResumed,
+  notifySubscriptionCancelled,
+  notifySubscriptionModified,
+} from "@/lib/notifications";
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -24,6 +33,8 @@ const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "active", label: "Active" },
   { value: "paused", label: "Paused" },
+  { value: "past_due", label: "Past Due" },
+  { value: "expired", label: "Expired" },
   { value: "cancelled", label: "Cancelled" },
 ];
 
@@ -34,6 +45,8 @@ export default function SubscriptionsClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [cancelTarget, setCancelTarget] = useState<Subscription | null>(null);
+  const [modifyTarget, setModifyTarget] = useState<Subscription | null>(null);
 
   useEffect(() => {
     getFreighterPublicKey()
@@ -98,6 +111,8 @@ export default function SubscriptionsClient() {
     setSubscriptions((prev) => {
       const updated = prev.map((s) => (s.id === id ? pauseSubscription(s) : s));
       saveSubscriptions(updated);
+      const paused = updated.find((s) => s.id === id);
+      if (paused) notifySubscriptionPaused(paused);
       return updated;
     });
   };
@@ -106,17 +121,50 @@ export default function SubscriptionsClient() {
     setSubscriptions((prev) => {
       const updated = prev.map((s) => (s.id === id ? resumeSubscription(s) : s));
       saveSubscriptions(updated);
+      const resumed = updated.find((s) => s.id === id);
+      if (resumed) notifySubscriptionResumed(resumed);
       return updated;
     });
   };
 
-  const handleCancel = async (id: string) => {
-    if (!confirm("Are you sure you want to cancel this subscription?")) return;
+  const handleCancel = (id: string) => {
+    const target = subscriptions.find((s) => s.id === id) ?? null;
+    setCancelTarget(target);
+  };
+
+  const handleCancelConfirm = (reason: string, note?: string) => {
+    if (!cancelTarget) return;
+    const id = cancelTarget.id;
     setSubscriptions((prev) => {
-      const updated = prev.map((s) => (s.id === id ? cancelSubscription(s) : s));
+      const updated = prev.map((s) =>
+        s.id === id ? cancelSubscription(s, reason, note) : s
+      );
       saveSubscriptions(updated);
+      const cancelled = updated.find((s) => s.id === id);
+      if (cancelled) notifySubscriptionCancelled(cancelled, reason);
       return updated;
     });
+    setCancelTarget(null);
+  };
+
+  const handleModify = (id: string) => {
+    const target = subscriptions.find((s) => s.id === id) ?? null;
+    setModifyTarget(target);
+  };
+
+  const handleModifyConfirm = (changes: Partial<Subscription>) => {
+    if (!modifyTarget) return;
+    const id = modifyTarget.id;
+    setSubscriptions((prev) => {
+      const updated = prev.map((s) =>
+        s.id === id ? modifySubscription(s, changes) : s
+      );
+      saveSubscriptions(updated);
+      const modified = updated.find((s) => s.id === id);
+      if (modified) notifySubscriptionModified(modified);
+      return updated;
+    });
+    setModifyTarget(null);
   };
 
   if (error) {
@@ -223,17 +271,41 @@ export default function SubscriptionsClient() {
                   </button>
                 )}
                 {sub.status !== "cancelled" && (
-                  <button
-                    onClick={() => handleCancel(sub.id)}
-                    className="text-xs px-3 py-1 rounded border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors"
-                  >
-                    Cancel
-                  </button>
+                  <>
+                    <button
+                      onClick={() => handleModify(sub.id)}
+                      className="text-xs px-3 py-1 rounded border border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 transition-colors"
+                    >
+                      Modify
+                    </button>
+                    <button
+                      onClick={() => handleCancel(sub.id)}
+                      className="text-xs px-3 py-1 rounded border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </>
                 )}
               </div>
             </div>
           ))}
         </div>
+      )}
+
+      {cancelTarget && (
+        <CancelModal
+          subscription={cancelTarget}
+          onConfirm={handleCancelConfirm}
+          onClose={() => setCancelTarget(null)}
+        />
+      )}
+
+      {modifyTarget && (
+        <SubscriptionModifyModal
+          subscription={modifyTarget}
+          onConfirm={handleModifyConfirm}
+          onClose={() => setModifyTarget(null)}
+        />
       )}
     </main>
   );

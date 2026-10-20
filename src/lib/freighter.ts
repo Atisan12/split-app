@@ -4,19 +4,31 @@
  * All functions are safe to import in Server Components — they guard against
  * SSR by checking `typeof window` before calling browser-only Freighter APIs.
  */
-import { enforceRateLimit, recordSecurityEvent, signLimiter } from "./walletSecurity";
 
-import { getActiveNetwork } from "./networks";
+export const NETWORK_PASSPHRASE =
+  process.env.NEXT_PUBLIC_STELLAR_NETWORK === "mainnet"
+    ? "Public Global Stellar Network ; September 2015"
+    : "Test SDF Network ; September 2015";
 
-/** Passphrase of the active network (user-selected in the browser, env default on the server). */
-export const NETWORK_PASSPHRASE = getActiveNetwork().passphrase;
+export type WalletType = "freighter" | "walletconnect" | "ledger";
 
-export type WalletType = "freighter" | "walletconnect";
+let walletConnectKit: WalletConnectKit | null = null;
 
-/** Lazily load the WalletConnect v2 service (browser only). */
-async function getWalletConnectService() {
+/** Cached Ledger public key once a device has been connected. */
+let ledgerPublicKey: string | null = null;
+
+/** Initialize WalletConnect kit */
+async function initWalletConnectKit() {
+  if (walletConnectKit) return walletConnectKit;
   if (typeof window === "undefined") throw new Error("Browser only");
-  return import("@/lib/walletconnect");
+
+  try {
+    const { getStellarWalletKit } = await import("@/lib/walletconnect-kit-stub");
+    walletConnectKit = getStellarWalletKit() as any;
+    return walletConnectKit;
+  } catch {
+    throw new Error("WalletConnect kit not available");
+  }
 }
 
 /** Connect Freighter and return the user's public key. */
@@ -44,8 +56,11 @@ export async function signWithFreighter(xdr: string): Promise<string> {
 export async function connectWalletConnect(): Promise<{ publicKey: string; uri: string }> {
   if (typeof window === "undefined") throw new Error("Browser only");
 
-  const { connectWalletConnect: connect } = await getWalletConnectService();
-  return connect();
+  const kit = await initWalletConnectKit();
+  if (!kit) throw new Error("WalletConnect kit not initialized");
+  const { uri, publicKey } = await (kit as any).connect();
+
+  return { publicKey, uri };
 }
 
 /** Get the WalletConnect public key if connected. */
@@ -53,8 +68,9 @@ export async function getWalletConnectPublicKey(): Promise<string | null> {
   if (typeof window === "undefined") throw new Error("Browser only");
 
   try {
-    const { getWalletConnectPublicKey: getKey } = await getWalletConnectService();
-    return getKey();
+    const kit = await initWalletConnectKit();
+    if (!kit) return null;
+    return (kit as any).getPublicKey() || null;
   } catch {
     return null;
   }
@@ -64,8 +80,53 @@ export async function getWalletConnectPublicKey(): Promise<string | null> {
 export async function signWithWalletConnect(xdr: string): Promise<string> {
   if (typeof window === "undefined") throw new Error("Browser only");
 
-  const { signWithWalletConnect: sign } = await getWalletConnectService();
+  const kit = await initWalletConnectKit();
+  if (!kit) throw new Error("WalletConnect kit not initialized");
+  return (kit as any).signTransaction(xdr, NETWORK_PASSPHRASE);
+}
+
+/** Connect a Ledger hardware wallet and return the user's public key. */
+export async function connectLedger(): Promise<string> {
+  if (typeof window === "undefined") throw new Error("Browser only");
+  const { connectLedger: connect } = await import("@/lib/ledger");
+  const publicKey = await connect();
+  ledgerPublicKey = publicKey;
+  return publicKey;
+}
+
+/** Get the connected Ledger public key without prompting. */
+export async function getLedgerPublicKey(): Promise<string | null> {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const { getLedgerPublicKey: getKey } = await import("@/lib/ledger");
+    const key = await getKey();
+    ledgerPublicKey = key;
+    return key;
+  } catch {
+    return ledgerPublicKey;
+  }
+}
+
+/** Sign a transaction XDR with a Ledger hardware wallet. */
+export async function signWithLedger(xdr: string): Promise<string> {
+  if (typeof window === "undefined") throw new Error("Browser only");
+  const { signWithLedger: sign } = await import("@/lib/ledger");
   return sign(xdr, NETWORK_PASSPHRASE);
+}
+
+/** Disconnect the Ledger hardware wallet. */
+export async function disconnectLedger(): Promise<void> {
+  if (typeof window === "undefined") throw new Error("Browser only");
+
+  try {
+    const { disconnectLedger: disconnect } = await import("@/lib/ledger");
+    await disconnect();
+  } catch {
+    // Ignore errors on disconnect
+  } finally {
+    ledgerPublicKey = null;
+  }
 }
 
 /** Disconnect WalletConnect. */
@@ -73,8 +134,9 @@ export async function disconnectWalletConnect(): Promise<void> {
   if (typeof window === "undefined") throw new Error("Browser only");
 
   try {
-    const { disconnectWalletConnect: disconnect } = await getWalletConnectService();
-    await disconnect();
+    const kit = await initWalletConnectKit();
+    if (!kit) return;
+    await (kit as any).disconnect();
   } catch {
     // Ignore errors on disconnect
   }
@@ -83,6 +145,10 @@ export async function disconnectWalletConnect(): Promise<void> {
 /** Returns true if any supported wallet is currently connected. */
 export async function isWalletConnected(): Promise<boolean> {
   if (typeof window === "undefined") return false;
+  try {
+    const ledgerKey = await getLedgerPublicKey();
+    if (ledgerKey) return true;
+  } catch { /* fall through */ }
   try {
     const wcKey = await getWalletConnectPublicKey();
     if (wcKey) return true;
@@ -95,76 +161,30 @@ export async function isWalletConnected(): Promise<boolean> {
   }
 }
 
-/**
- * Sign a transaction with the currently connected wallet adapter.
- * Rate limited, and rejected/failed signatures are logged so repeated
- * unexpected signing prompts surface as suspicious activity.
- */
+/** Sign a transaction with the currently connected wallet adapter. */
 export async function signTransaction(xdr: string): Promise<string> {
   if (typeof window === "undefined") throw new Error("Browser only");
-  enforceRateLimit(signLimiter, "sign", "transaction signing");
 
+  // Prefer Ledger if a device is the active wallet
   try {
-    // Try WalletConnect first if available
-    let wcKey: string | null = null;
-    try {
-      wcKey = await getWalletConnectPublicKey();
-    } catch {
-      // WalletConnect not available, try Freighter
+    const ledgerKey = await getLedgerPublicKey();
+    if (ledgerKey) {
+      return signWithLedger(xdr);
     }
-    if (wcKey) return await signWithWalletConnect(xdr);
-
-    // Fall back to Freighter
-    return await signWithFreighter(xdr);
-  } catch (e) {
-    recordSecurityEvent({ type: "sign_rejected", detail: e instanceof Error ? e.message : String(e) });
-    throw e;
-  }
-}
-
-/** Build the canonical co-signer approval message for an invoice. */
-export function buildCoSignerApprovalMessage(invoiceId: string, address: string): string {
-  return [
-    "Stellar Split — Co-signer Approval",
-    `Invoice: ${invoiceId}`,
-    `Co-signer: ${address}`,
-    `Network: ${NETWORK_PASSPHRASE}`,
-  ].join("\n");
-}
-
-export interface CoSignerApprovalSignature {
-  /** The co-signer address that produced the signature. */
-  address: string;
-  /** The invoice being approved. */
-  invoiceId: string;
-  /** The exact message that was signed (for server-side verification). */
-  message: string;
-  /** Base64-encoded signature returned by the wallet. */
-  signature: string;
-}
-
-/**
- * Sign a co-signer approval for an invoice using the connected wallet.
- *
- * Builds a deterministic approval message and signs it via the active wallet
- * adapter (WalletConnect if connected, otherwise Freighter). Throws if no
- * wallet is connected so callers can prompt the user to connect first.
- */
-export async function signCoSignerApproval(
-  invoiceId: string,
-  address: string,
-): Promise<CoSignerApprovalSignature> {
-  if (typeof window === "undefined") throw new Error("Browser only");
-  if (!invoiceId) throw new Error("Invoice ID is required");
-  if (!address) throw new Error("Co-signer address is required");
-
-  const connected = await isWalletConnected();
-  if (!connected) {
-    throw new Error("Wallet not connected. Please connect your Freighter wallet.");
+  } catch {
+    // Ledger not available, try WalletConnect
   }
 
-  const message = buildCoSignerApprovalMessage(invoiceId, address);
-  const signature = await signTransaction(message);
+  // Try WalletConnect first if available
+  try {
+    const wcKey = await getWalletConnectPublicKey();
+    if (wcKey) {
+      return signWithWalletConnect(xdr);
+    }
+  } catch {
+    // WalletConnect not available, try Freighter
+  }
 
-  return { address, invoiceId, message, signature };
+  // Fall back to Freighter
+  return signWithFreighter(xdr);
 }

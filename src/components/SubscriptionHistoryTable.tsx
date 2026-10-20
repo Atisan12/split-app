@@ -5,6 +5,8 @@ import { formatAmount } from "@stellar-split/sdk";
 
 interface Props {
   history: SubscriptionInvoice[];
+  /** Optional cancellation metadata keyed by invoice ID. */
+  cancellationReasons?: Record<string, string>;
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -22,14 +24,25 @@ function escapeCSV(value: string): string {
 }
 
 /** Builds and triggers a CSV download for the given history rows. */
-function downloadHistoryCSV(history: SubscriptionInvoice[]): void {
-  const headers = ["Date", "Amount", "Currency", "Status", "Transaction Hash"];
+function downloadHistoryCSV(
+  history: SubscriptionInvoice[],
+  cancellationReasons: Record<string, string> = {},
+): void {
+  const headers = [
+    "Date",
+    "Amount",
+    "Currency",
+    "Status",
+    "Transaction Hash",
+    "Cancellation Reason",
+  ];
   const rows = history.map((inv) => [
     new Date(inv.generatedAt * 1000).toISOString(),
     formatAmount(inv.amount),
     "USDC",
     inv.status,
     inv.invoiceId,
+    cancellationReasons[inv.invoiceId] ?? "",
   ]);
 
   const csvContent = [headers, ...rows]
@@ -46,7 +59,10 @@ function downloadHistoryCSV(history: SubscriptionInvoice[]): void {
   URL.revokeObjectURL(url);
 }
 
-export default function SubscriptionHistoryTable({ history }: Props) {
+export default function SubscriptionHistoryTable({
+  history,
+  cancellationReasons = {},
+}: Props) {
   if (history.length === 0) {
     return (
       <p className="text-sm text-gray-500 py-6 text-center">
@@ -61,7 +77,7 @@ export default function SubscriptionHistoryTable({ history }: Props) {
       <div className="flex justify-end mb-3">
         <button
           type="button"
-          onClick={() => downloadHistoryCSV(history)}
+          onClick={() => downloadHistoryCSV(history, cancellationReasons)}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-xs text-gray-300 font-medium transition-colors"
           aria-label="Export subscription history as CSV"
         >
@@ -101,6 +117,9 @@ export default function SubscriptionHistoryTable({ history }: Props) {
               <th className="text-right py-2 px-3 text-gray-500 font-medium">
                 Status
               </th>
+              <th className="text-left py-2 px-3 text-gray-500 font-medium">
+                Cancellation Reason
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -123,6 +142,18 @@ export default function SubscriptionHistoryTable({ history }: Props) {
                   className={`py-2.5 px-3 text-right font-medium ${STATUS_STYLES[inv.status]}`}
                 >
                   {inv.status}
+                </td>
+                <td className="py-2.5 px-3 text-gray-400">
+                  {cancellationReasons[inv.invoiceId] ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-red-900/40 text-red-300">
+                        Cancelled
+                      </span>
+                      <span>{cancellationReasons[inv.invoiceId]}</span>
+                    </span>
+                  ) : (
+                    <span className="text-gray-600">—</span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -149,6 +180,14 @@ export default function SubscriptionHistoryTable({ history }: Props) {
               <p className="text-gray-300">
                 Amount: {formatAmount(inv.amount)} USDC
               </p>
+              {cancellationReasons[inv.invoiceId] && (
+                <p className="flex items-center gap-1.5">
+                  <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-red-900/40 text-red-300">
+                    Cancelled
+                  </span>
+                  <span>{cancellationReasons[inv.invoiceId]}</span>
+                </p>
+              )}
             </div>
           </div>
         ))}

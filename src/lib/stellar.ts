@@ -6,7 +6,7 @@
 
 import { StellarSplitClient, formatAmount } from "@stellar-split/sdk";
 import { NETWORK_PASSPHRASE } from "./freighter";
-import { blockchainCache } from "./blockchainCache";
+import { signTransaction } from "./walletSigner";
 
 let _client: StellarSplitClient | null = null;
 
@@ -69,12 +69,7 @@ export async function quoteXlmToUsdc(
   const destinationAmount = formatAmount(usdcAmount);
   const usdcAsset = new Asset("USDC", USDC_CONTRACT_ID);
   const server = new Horizon.Server(HORIZON_URL);
-  // Cached briefly: a user tweaking an amount input re-triggers this quote
-  // repeatedly for the same wallet/amount pair within a few seconds.
-  const cacheKey = `${walletAddress}:${destinationAmount}`;
-  const result = await blockchainCache.getOrFetch("quote", cacheKey, () =>
-    server.strictReceivePaths(walletAddress, usdcAsset, destinationAmount).call()
-  );
+  const result = await server.strictReceivePaths(walletAddress, usdcAsset, destinationAmount).call();
   const path = result.records?.[0];
   if (!path) {
     throw new Error("No XLM->USDC path found.");
@@ -95,7 +90,6 @@ export async function convertXlmToUsdc(
   }
 
   const { Asset, Horizon, Operation, TransactionBuilder, BASE_FEE } = await import("@stellar/stellar-sdk");
-  const { signWithFreighter } = await import("./freighter");
 
   const destinationAmount = formatAmount(usdcAmount);
   const usdcAsset = new Asset("USDC", USDC_CONTRACT_ID);
@@ -134,7 +128,10 @@ export async function convertXlmToUsdc(
     .setTimeout(30)
     .build();
 
-  const signedXdr = await signWithFreighter(tx.toXDR());
+  const signedXdr = await signTransaction(tx.toXDR(), {
+    address: walletAddress,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  });
   const signedTx = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
   const submitResult = await server.submitTransaction(signedTx);
 
@@ -168,7 +165,6 @@ export async function payMilestone(params: {
 }): Promise<{ txHash: string }> {
   const client = getSplitClient();
   const { TransactionBuilder, BASE_FEE, Memo, nativeToScVal, rpc } = await import("@stellar/stellar-sdk");
-  const { signWithFreighter } = await import("./freighter");
 
   // The published @stellar-split/sdk keeps `contract`, `server` and `config`
   // as private fields with no public accessors. Milestone payments need a
@@ -208,7 +204,10 @@ export async function payMilestone(params: {
   }
 
   const preparedTx = rpc.assembleTransaction(tx, simResult).build();
-  const signedXdr = await signWithFreighter(preparedTx.toXDR());
+  const signedXdr = await signTransaction(preparedTx.toXDR(), {
+    address: params.payer,
+    networkPassphrase,
+  });
   const signedTx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
   const sendResult = await internals.server.sendTransaction(signedTx);
 
@@ -242,16 +241,6 @@ export async function payMilestone(params: {
 export async function fetchUsdcBalance(
   walletAddress: string,
   tokenContractId = USDC_CONTRACT_ID
-): Promise<bigint> {
-  const cacheKey = `${walletAddress}:${tokenContractId}`;
-  return blockchainCache.getOrFetch("balance", cacheKey, () =>
-    fetchUsdcBalanceUncached(walletAddress, tokenContractId)
-  );
-}
-
-async function fetchUsdcBalanceUncached(
-  walletAddress: string,
-  tokenContractId: string
 ): Promise<bigint> {
   const {
     Contract,

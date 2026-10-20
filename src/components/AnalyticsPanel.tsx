@@ -6,54 +6,14 @@ import { useI18n } from "@/components/I18nProvider";
 import type { Invoice } from "@stellar-split/sdk";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Skeleton } from "@/components/Skeleton";
-import { getAnalyticsSummary, type AnalyticsSummary } from "@/lib/analytics";
-import { calculateAgingBuckets, type AgingBucket } from "@/lib/invoiceAging";
+import {
+  aggregateSubscriptionAnalytics,
+  type Subscription,
+} from "@/lib/subscriptions";
 
 interface Props {
   invoices: Invoice[];
-}
-
-interface AppMetrics {
-  eventTotals: { name: string; count: number }[];
-  funnel: { step: string; count: number; conversion: number }[];
-  activeUsers: number;
-}
-
-const FUNNEL_STEPS = ["invoice_created", "invoice_funded", "invoice_released"] as const;
-
-function buildAppMetrics(summary: AnalyticsSummary): AppMetrics {
-  const totals = new Map<string, number>();
-  for (const event of summary.events) {
-    totals.set(event.name, (totals.get(event.name) ?? 0) + 1);
-  }
-  const eventTotals = Array.from(totals.entries())
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count);
-
-  const funnelTop = totals.get(FUNNEL_STEPS[0]) ?? 0;
-  const funnel = FUNNEL_STEPS.map((step) => {
-    const count = totals.get(step) ?? 0;
-    return {
-      step,
-      count,
-      conversion: funnelTop > 0 ? Math.round((count / funnelTop) * 100) : 0,
-    };
-  });
-
-  return { eventTotals, funnel, activeUsers: summary.activeUsers };
-}
-
-function trendIndicator(current: number, previous: number): { label: string; className: string } {
-  if (previous === 0) {
-    return current > 0
-      ? { label: "▲ new", className: "text-red-400" }
-      : { label: "—", className: "text-gray-500" };
-  }
-  const change = ((current - previous) / previous) * 100;
-  if (Math.abs(change) < 1) return { label: "— 0%", className: "text-gray-400" };
-  return change > 0
-    ? { label: `▲ ${change.toFixed(0)}%`, className: "text-red-400" }
-    : { label: `▼ ${Math.abs(change).toFixed(0)}%`, className: "text-green-400" };
+  subscriptions?: Subscription[];
 }
 
 type RangePreset = "7d" | "30d" | "3m" | "custom";
@@ -71,7 +31,7 @@ const RANGE_OPTIONS: RangeOption[] = [
   { key: "custom", label: "Custom", days: null },
 ];
 
-export default function AnalyticsPanel({ invoices }: Props) {
+export default function AnalyticsPanel({ invoices, subscriptions = [] }: Props) {
   const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
   const [range, setRange] = useState<RangePreset>("30d");
@@ -141,28 +101,18 @@ export default function AnalyticsPanel({ invoices }: Props) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([week, count]) => ({ week, invoices: count }));
 
-  // Application metrics (event tracking + funnel + active users) for the range.
-  const appMetrics = useMemo(() => {
-    const summary = getAnalyticsSummary({ from, to });
-    return buildAppMetrics(summary);
-  }, [from, to]);
+  // Subscription analytics (scoped to the same date window as invoices).
+  const subscriptionAnalytics = useMemo(
+    () => aggregateSubscriptionAnalytics(subscriptions, from, to),
+    [subscriptions, from, to]
+  );
 
-  // Invoice aging buckets for the current scoped invoices, with a trend
-  // indicator comparing the current window against the preceding window.
-  const aging = useMemo(() => {
-    const current = calculateAgingBuckets(scopedInvoices, to);
-    const windowSeconds = Math.max(to - from, 0);
-    const prevFrom = from - windowSeconds;
-    const prevInvoices = invoices.filter(
-      (inv) => inv.deadline >= prevFrom && inv.deadline < from
-    );
-    const previous = calculateAgingBuckets(prevInvoices, from);
-    return { current, previous };
-  }, [scopedInvoices, invoices, from, to]);
-
-  const overdueTrend = trendIndicator(
-    aging.current.overdueTotal,
-    aging.previous.overdueTotal
+  const cancellationReasonData = useMemo(
+    () =>
+      Object.entries(subscriptionAnalytics.cancellationReasons)
+        .sort(([, a], [, b]) => b - a)
+        .map(([reason, count]) => ({ reason, count })),
+    [subscriptionAnalytics.cancellationReasons]
   );
 
   return (
@@ -272,70 +222,76 @@ export default function AnalyticsPanel({ invoices }: Props) {
             </div>
           </div>
 
-          {/* Invoice Aging Summary */}
-          <div className="bg-gray-800 rounded-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-sm text-gray-400">{t("dashboard.agingSummary")}</p>
-              <span
-                className={`text-xs font-medium ${overdueTrend.className}`}
-                aria-label="Overdue trend versus previous period"
-              >
-                {overdueTrend.label}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {aging.current.buckets.map((bucket: AgingBucket) => (
-                <div key={bucket.key} className="bg-gray-900/60 rounded-lg p-3">
-                  <p className="text-xs text-gray-400 mb-1">{bucket.label}</p>
-                  <p className="text-sm font-semibold text-gray-200">
-                    {formatAmount(bucket.amount)}
-                  </p>
-                  <p className="text-xs text-gray-500">{bucket.count} invoices</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Application Metrics */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="bg-gray-800 rounded-lg p-4">
-              <p className="text-xs text-gray-400 mb-1">{t("dashboard.activeUsers")}</p>
-              <p className="text-lg font-semibold">{appMetrics.activeUsers}</p>
-            </div>
-            <div className="bg-gray-800 rounded-lg p-4 sm:col-span-2">
-              <p className="text-xs text-gray-400 mb-2">{t("dashboard.conversionFunnel")}</p>
-              <div className="flex flex-wrap items-center gap-2">
-                {appMetrics.funnel.map((step) => (
-                  <div
-                    key={step.step}
-                    className="flex-1 min-w-[90px] bg-gray-900/60 rounded-lg px-3 py-2"
-                  >
-                    <p className="text-xs text-gray-400 truncate">{step.step}</p>
-                    <p className="text-sm font-semibold text-gray-200">{step.count}</p>
-                    <p className="text-xs text-indigo-300">{step.conversion}%</p>
-                  </div>
-                ))}
+          {/* Subscription Analytics */}
+          <div className="space-y-3">
+            <p className="text-sm text-gray-400">{t("dashboard.subscriptions")}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-4">
+                <p className="text-xs text-green-300 mb-1">{t("dashboard.activeSubscriptions")}</p>
+                <p className="text-lg font-semibold text-green-300">
+                  {subscriptionAnalytics.active}
+                </p>
+              </div>
+              <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4">
+                <p className="text-xs text-yellow-300 mb-1">{t("dashboard.pausedSubscriptions")}</p>
+                <p className="text-lg font-semibold text-yellow-300">
+                  {subscriptionAnalytics.paused}
+                </p>
+              </div>
+              <div className="bg-gray-700/50 border border-gray-600 rounded-lg p-4">
+                <p className="text-xs text-gray-400 mb-1">{t("dashboard.cancelledSubscriptions")}</p>
+                <p className="text-lg font-semibold text-gray-400">
+                  {subscriptionAnalytics.cancelled}
+                </p>
               </div>
             </div>
-          </div>
-
-          {/* Event Totals */}
-          {appMetrics.eventTotals.length > 0 && (
-            <div className="bg-gray-800 rounded-lg p-4">
-              <p className="text-sm text-gray-400 mb-3">{t("dashboard.eventTotals")}</p>
-              <ul className="space-y-1">
-                {appMetrics.eventTotals.slice(0, 8).map((event) => (
-                  <li
-                    key={event.name}
-                    className="flex items-center justify-between text-xs text-gray-300"
-                  >
-                    <span className="truncate">{event.name}</span>
-                    <span className="font-semibold text-gray-200">{event.count}</span>
-                  </li>
-                ))}
-              </ul>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="bg-gray-800 rounded-lg p-4">
+                <p className="text-xs text-gray-400 mb-1">{t("dashboard.mrr")}</p>
+                <p className="text-lg font-semibold">
+                  {formatAmount(subscriptionAnalytics.mrr)}
+                </p>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-4">
+                <p className="text-xs text-gray-400 mb-1">{t("dashboard.churnRate")}</p>
+                <p className="text-lg font-semibold">
+                  {(subscriptionAnalytics.churnRate * 100).toFixed(1)}%
+                </p>
+              </div>
             </div>
-          )}
+
+            {cancellationReasonData.length > 0 && (
+              <div className="bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                <p className="text-sm text-gray-400 mb-3">
+                  {t("dashboard.cancellationReasons")}
+                </p>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart
+                    data={cancellationReasonData}
+                    margin={{ top: 20, right: 30, left: 0, bottom: 50 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                    <XAxis
+                      dataKey="reason"
+                      tick={{ fontSize: 12 }}
+                      angle={-45}
+                      textAnchor="end"
+                      height={80}
+                    />
+                    <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#1f2937",
+                        border: "1px solid #374151",
+                        borderRadius: "8px",
+                      }}
+                    />
+                    <Bar dataKey="count" fill="#f59e0b" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
 
           {/* Weekly Chart */}
           {chartData.length > 0 && (

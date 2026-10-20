@@ -8,6 +8,8 @@ import { getFreighterPublicKey } from "@/lib/freighter";
 import { generateCsv, type CsvRow } from "@/lib/csvExport";
 import type { Invoice } from "@stellar-split/sdk";
 import ChartBuilder, { type ChartBuilderDataPoint } from "@/components/analytics/ChartBuilder";
+import AnalyticsPanel from "@/components/subscriptions/AnalyticsPanel";
+import { loadSubscriptions, type Subscription } from "@/lib/subscriptions";
 
 const STROOPS = 10_000_000;
 
@@ -119,7 +121,10 @@ export default function AnalyticsPage() {
   const [error, setError] = useState<string | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [drilldownStatus, setDrilldownStatus] = useState<string | null>(null);
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [activeTab, setActiveTab] = useState<"invoices" | "subscriptions">(
+    "invoices"
+  );
 
   useEffect(() => {
     getFreighterPublicKey()
@@ -156,6 +161,17 @@ export default function AnalyticsPage() {
     fetchInvoices();
   }, [publicKey]);
 
+  useEffect(() => {
+    if (!publicKey) return;
+    try {
+      setSubscriptions(loadSubscriptions(publicKey));
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to load subscriptions"
+      );
+    }
+  }, [publicKey]);
+
   const filtered = useMemo(() => {
     return invoices.filter((inv) => {
       const ts = inv.createdAt ?? inv.deadline - 7 * 86400;
@@ -165,23 +181,6 @@ export default function AnalyticsPage() {
       return true;
     });
   }, [invoices, dateFrom, dateTo]);
-
-  const drilldownInvoices = useMemo(() => {
-    if (!drilldownStatus) return [];
-    const now = Date.now() / 1000;
-    switch (drilldownStatus) {
-      case "Released":
-        return filtered.filter((i) => i.status === "Released");
-      case "Refunded":
-        return filtered.filter((i) => i.status === "Refunded");
-      case "Active":
-        return filtered.filter((i) => i.status === "Pending" && i.deadline >= now);
-      case "Expired":
-        return filtered.filter((i) => i.status === "Pending" && i.deadline < now);
-      default:
-        return [];
-    }
-  }, [filtered, drilldownStatus]);
 
   const stats = useMemo(() => {
     const total = filtered.length;
@@ -415,6 +414,37 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
+        <div className="flex gap-1 mb-6 border-b border-gray-800">
+          <button
+            type="button"
+            onClick={() => setActiveTab("invoices")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              activeTab === "invoices"
+                ? "border-indigo-500 text-white"
+                : "border-transparent text-gray-400 hover:text-gray-200"
+            }`}
+          >
+            Invoices
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("subscriptions")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              activeTab === "subscriptions"
+                ? "border-indigo-500 text-white"
+                : "border-transparent text-gray-400 hover:text-gray-200"
+            }`}
+          >
+            Subscriptions
+          </button>
+        </div>
+
+        {activeTab === "subscriptions" ? (
+          <div className="mb-8">
+            <AnalyticsPanel subscriptions={subscriptions} />
+          </div>
+        ) : (
+          <>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <KpiCard
             label="Total Raised"
@@ -453,50 +483,10 @@ export default function AnalyticsPage() {
               Invoice Status Breakdown
             </h2>
             <Suspense fallback={<ChartFallback />}>
-              <DynamicStatusPieChart
-                data={stats.statusData}
-                onSliceClick={(name) => setDrilldownStatus(name)}
-              />
+              <DynamicStatusPieChart data={stats.statusData} />
             </Suspense>
-            <p className="text-xs text-gray-500 mt-2">
-              Click a slice to drill into those invoices.
-            </p>
           </div>
         </div>
-
-        {drilldownStatus && (
-          <div
-            className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-8"
-            data-testid="status-drilldown-panel"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
-                {drilldownStatus} invoices ({drilldownInvoices.length})
-              </h2>
-              <button
-                type="button"
-                onClick={() => setDrilldownStatus(null)}
-                className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-              >
-                Clear
-              </button>
-            </div>
-            {drilldownInvoices.length === 0 ? (
-              <p className="text-sm text-gray-500">No invoices in this category.</p>
-            ) : (
-              <ul className="divide-y divide-gray-800">
-                {drilldownInvoices.slice(0, 50).map((inv) => (
-                  <li key={inv.id} className="py-2 flex items-center justify-between text-sm">
-                    <span className="text-gray-300">Invoice #{inv.id}</span>
-                    <span className="text-gray-500">
-                      {stroopsToUsdc(inv.funded).toFixed(2)} USDC
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
           <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
@@ -562,6 +552,8 @@ export default function AnalyticsPage() {
             </div>
           )}
         </div>
+          </>
+        )}
 
         <Link
           href="/dashboard"

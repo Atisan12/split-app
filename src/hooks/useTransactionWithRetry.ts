@@ -1,10 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
 import { useToast } from '@/contexts/ToastContext';
-import {
-  retryWithBackoff,
-  isRetryableError,
-  type RetryMetrics,
-} from '@/utils/retryWithBackoff';
 
 interface RetryOptions {
   maxRetries?: number;
@@ -12,72 +7,158 @@ interface RetryOptions {
   retryableStatusCodes?: number[];
 }
 
+const MAX_DELAY_MS = 30000;
+
 const DEFAULT_OPTIONS = {
   maxRetries: 5,
   initialDelayMs: 1000,
   retryableStatusCodes: [429],
 };
 
+// Ledger hardware wallet error codes/messages that should never be retried.
+const LEDGER_ERROR_PATTERNS = [
+  'disconnected',
+  'device disconnected',
+  'no device',
+  'device not found',
+  'app not open',
+  'app is not open',
+  'stellar app',
+  'locked',
+  'device locked',
+  'denied',
+  'user rejected',
+  '0x6b0c',
+  '0x5515',
+  '0x6985',
+];
+
+const LEDGER_ERROR_MESSAGES: Record<string, string> = {
+  disconnected: 'Ledger device disconnected. Please reconnect your device and try again.',
+  'no device': 'No Ledger device found. Please connect your Ledger and try again.',
+  'app not open': 'Please open the Stellar app on your Ledger device and try again.',
+  locked: 'Your Ledger device is locked. Please unlock it and try again.',
+  denied: 'Transaction was rejected on your Ledger device.',
+};
+
+function isLedgerError(error: any): boolean {
+  const message = String(error?.message || error || '').toLowerCase();
+  const name = String(error?.name || '').toLowerCase();
+  const code = String(error?.code || error?.statusCode || '').toLowerCase();
+  const haystack = `${message} ${name} ${code}`;
+  return LEDGER_ERROR_PATTERNS.some((pattern) => haystack.includes(pattern));
+}
+
+function getLedgerErrorMessage(error: any): string {
+  const message = String(error?.message || error || '').toLowerCase();
+  for (const [key, friendly] of Object.entries(LEDGER_ERROR_MESSAGES)) {
+    if (message.includes(key)) return friendly;
+  }
+  return 'Ledger device error. Please check your connection and try again.';
+}
+
 export function useTransactionWithRetry(options?: RetryOptions) {
   const toast = useToast();
   const abortControllers = useRef<Map<string, AbortController>>(new Map());
   const [attemptCount, setAttemptCount] = useState(0);
-  const [metrics, setMetrics] = useState<RetryMetrics | null>(null);
   const opts = { ...DEFAULT_OPTIONS, ...options };
+
+  const getStatusCode = (error: any): number | undefined => {
+    return error?.response?.status || error?.status;
+  };
+
+  const delay = (ms: number, operationId: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      const checkInterval = setInterval(() => {
+        if (abortControllers.current.get(operationId)?.signal.aborted) {
+          clearInterval(checkInterval);
+          reject(new Error('Transaction cancelled by user'));
+          return;
+        }
+        if (Date.now() - startTime >= ms) {
+          clearInterval(checkInterval);
+          resolve();
+        }
+      }, 100);
+    });
+  };
 
   const executeWithRetry = useCallback(
     async <T,>(
       fn: () => Promise<T>,
       operationId: string = `op-${Date.now()}-${Math.random()}`
     ): Promise<T> => {
+      let lastError: Error | null = null;
       let toastId: string | null = null;
 
-      const controller = abortControllers.current.get(operationId);
-      const signal = controller?.signal;
+      for (let attempt = 1; attempt <= opts.maxRetries; attempt++) {
+        setAttemptCount(attempt);
+        try {
+          // Check if user cancelled
+          if (abortControllers.current.get(operationId)?.signal.aborted) {
+            throw new Error('Transaction cancelled by user');
+          }
 
-      try {
-        const result = await retryWithBackoff<T>(fn, {
-          maxRetries: opts.maxRetries,
-          initialDelayMs: opts.initialDelayMs,
-          signal,
-          isRetryable: (error) =>
-            isRetryableError(error, opts.retryableStatusCodes),
-          onAttempt: (attempt) => {
-            setAttemptCount(attempt);
-          },
-          onRetry: ({ attempt, delayMs, error }) => {
-            const countdownSeconds = Math.ceil(delayMs / 1000);
-            const reason =
-              (error as any)?.response?.status === 429 ||
-              (error as any)?.status === 429
-                ? 'Rate limited'
-                : 'Transient error';
+          const result = await fn();
+          if (toastId) toast.dismiss(toastId);
+          return result;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+
+          // Ledger hardware wallet errors are never retryable; surface a clear message.
+          if (isLedgerError(error)) {
             if (toastId) toast.dismiss(toastId);
-            toastId = toast.info(
-              `${reason}. Retrying in ${countdownSeconds}s... (attempt ${attempt}/${opts.maxRetries})`
+            toast.error(getLedgerErrorMessage(error));
+            throw lastError;
+          }
+
+          const statusCode = getStatusCode(error);
+          const isRetryable =
+            opts.retryableStatusCodes.includes(statusCode!) &&
+            attempt < opts.maxRetries;
+
+          if (isRetryable) {
+            const delayMs = Math.min(
+              opts.initialDelayMs * Math.pow(2, attempt - 1),
+              MAX_DELAY_MS
             );
-          },
-          onMetrics: (m) => {
-            setMetrics(m);
-          },
-        });
+            const countdownSeconds = Math.ceil(delayMs / 1000);
 
-        if (toastId) toast.dismiss(toastId);
-        return result;
-      } catch (error) {
-        if (toastId) toast.dismiss(toastId);
+            // Show countdown toast
+            const message = `Rate limited. Retrying in ${countdownSeconds}s...`;
+            toastId = toast.info(message);
 
-        const err = error instanceof Error ? error : new Error(String(error));
-        const wasRetryable = isRetryableError(err, opts.retryableStatusCodes);
+            // Wait with cancellation support
+            try {
+              await delay(delayMs, operationId);
+            } catch (e) {
+              if (toastId) toast.dismiss(toastId);
+              throw e;
+            }
+          } else {
+            // Non-retryable error or max retries exceeded
+            const errorMsg = lastError?.message || 'Transaction failed';
+            const isMaxRetries = attempt === opts.maxRetries;
 
-        if (wasRetryable) {
-          toast.error(`${err.message}. Please try again later.`);
-        } else {
-          toast.error(err.message || 'Transaction failed');
+            if (toastId) toast.dismiss(toastId);
+
+            if (isMaxRetries && opts.retryableStatusCodes.includes(statusCode!)) {
+              // Max retries for rate limit
+              toast.error(`${errorMsg}. Please try again later.`);
+            } else {
+              // Other errors
+              toast.error(errorMsg);
+            }
+
+            throw lastError;
+          }
         }
-
-        throw err;
       }
+
+      // Should not reach here but fallback
+      if (toastId) toast.dismiss(toastId);
+      throw lastError || new Error('Transaction failed');
     },
     [opts, toast]
   );
@@ -90,5 +171,5 @@ export function useTransactionWithRetry(options?: RetryOptions) {
     }
   }, []);
 
-  return { executeWithRetry, cancel, attemptCount, metrics };
+  return { executeWithRetry, cancel, attemptCount };
 }

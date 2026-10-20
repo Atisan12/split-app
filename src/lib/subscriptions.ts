@@ -1,9 +1,12 @@
 import { formatAmount } from "@stellar-split/sdk";
 import type {
   Subscription,
+  SubscriptionCancellationReason,
   SubscriptionFrequency,
   SubscriptionInvoice,
+  SubscriptionStatus,
 } from "@/types/subscription";
+import { pushNotification } from "@/lib/notifications/pushNotifications";
 
 const STORAGE_KEY = "stellar_split_subscriptions";
 const SCHEDULE_STORAGE_KEY = "stellar_split_recurring_schedules";
@@ -546,26 +549,156 @@ export function computeUpcomingDates(
 }
 
 /**
- * Pause a subscription — sets status to "paused".
+ * Lifecycle state-transition guards.
+ */
+export function canPause(sub: Subscription): boolean {
+  return sub.status === "active";
+}
+
+export function canResume(sub: Subscription): boolean {
+  return sub.status === "paused";
+}
+
+export function canCancel(sub: Subscription): boolean {
+  return sub.status === "active" || sub.status === "paused";
+}
+
+/**
+ * Pause a subscription — sets status to "paused" and records the timestamp.
  */
 export function pauseSubscription(sub: Subscription): Subscription {
-  return { ...sub, status: "paused" as const };
+  if (!canPause(sub)) return sub;
+  const pausedAt = Date.now() / 1000;
+  pushNotification({
+    title: "Subscription paused",
+    body: `Your ${formatFrequency(sub.frequency).toLowerCase()} subscription has been paused.`,
+    kind: "subscription-paused",
+    subscriptionId: sub.id,
+  });
+  return { ...sub, status: "paused" as const, pausedAt };
 }
 
 /**
  * Resume a subscription — sets status to "active" and recomputes nextRunDate.
  */
 export function resumeSubscription(sub: Subscription): Subscription {
+  if (!canResume(sub)) return sub;
   const now = Date.now() / 1000;
   const nextRunDate = now + sub.intervalDays * 86400;
-  return { ...sub, status: "active" as const, nextRunDate };
+  return {
+    ...sub,
+    status: "active" as const,
+    nextRunDate,
+    pausedAt: undefined,
+  };
 }
 
 /**
- * Cancel a subscription — sets status to "cancelled".
+ * Cancel a subscription — sets status to "cancelled" and records the reason.
  */
-export function cancelSubscription(sub: Subscription): Subscription {
-  return { ...sub, status: "cancelled" as const };
+export function cancelSubscription(
+  sub: Subscription,
+  reason: SubscriptionCancellationReason,
+  note?: string
+): Subscription {
+  if (!canCancel(sub)) return sub;
+  const cancelledAt = Date.now() / 1000;
+  pushNotification({
+    title: "Subscription cancelled",
+    body: `Your ${formatFrequency(sub.frequency).toLowerCase()} subscription has been cancelled.`,
+    kind: "subscription-cancelled",
+    subscriptionId: sub.id,
+  });
+  return {
+    ...sub,
+    status: "cancelled" as const,
+    cancelledAt,
+    cancellationReason: reason,
+    cancellationNote: note,
+  };
+}
+
+/**
+ * Apply modifications immediately and recompute nextRunDate.
+ */
+export function modifySubscription(
+  sub: Subscription,
+  changes: Partial<
+    Pick<
+      Subscription,
+      "frequency" | "intervalDays" | "recipients" | "totalUsdcCollected"
+    >
+  >
+): Subscription {
+  const updated: Subscription = { ...sub, ...changes };
+  const intervalDays =
+    changes.intervalDays ??
+    (changes.frequency ? frequencyToIntervalDays(changes.frequency) : sub.intervalDays);
+  const now = Date.now() / 1000;
+  return {
+    ...updated,
+    intervalDays,
+    nextRunDate: now + intervalDays * 86400,
+  };
+}
+
+/**
+ * Emit a billing notification when an invoice is generated.
+ */
+export function notifyInvoiceGenerated(
+  sub: Subscription,
+  invoice: SubscriptionInvoice
+): void {
+  pushNotification({
+    title: "Invoice generated",
+    body: `An invoice of ${formatAmount(invoice.amount)} was generated for your subscription.`,
+    kind: "invoice-generated",
+    subscriptionId: sub.id,
+    invoiceId: invoice.id,
+  });
+}
+
+export interface SubscriptionAnalytics {
+  countsByStatus: Record<SubscriptionStatus, number>;
+  total: number;
+  mrr: bigint;
+  churnRate: number;
+  cancellationReasons: Record<string, number>;
+}
+
+/**
+ * Aggregate subscription analytics for the dashboard.
+ */
+export function aggregateSubscriptionAnalytics(
+  subs: Subscription[]
+): SubscriptionAnalytics {
+  const countsByStatus: Record<SubscriptionStatus, number> = {
+    active: 0,
+    paused: 0,
+    cancelled: 0,
+  };
+  const cancellationReasons: Record<string, number> = {};
+  let mrr = BigInt(0);
+
+  for (const sub of subs) {
+    countsByStatus[sub.status] = (countsByStatus[sub.status] ?? 0) + 1;
+
+    if (sub.status === "active") {
+      const perRun = sub.recipients.reduce((sum, r) => sum + r.amount, BigInt(0));
+      const runsPerMonth = 30 / sub.intervalDays;
+      mrr += BigInt(Math.round(Number(perRun) * runsPerMonth));
+    }
+
+    if (sub.status === "cancelled" && sub.cancellationReason) {
+      cancellationReasons[sub.cancellationReason] =
+        (cancellationReasons[sub.cancellationReason] ?? 0) + 1;
+    }
+  }
+
+  const total = subs.length;
+  const churnRate = total > 0 ? countsByStatus.cancelled / total : 0;
+
+  return { countsByStatus, total, mrr, churnRate, cancellationReasons };
 }
 
 /**

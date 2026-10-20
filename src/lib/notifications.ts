@@ -7,8 +7,9 @@ interface NotificationPreferences {
   deadlineApproaching: boolean;
   invoiceReleased: boolean;
   invoiceRefunded: boolean;
-  agingAlert: boolean;
-  backupFailure: boolean;
+  subscriptionBilling: boolean;
+  subscriptionPaused: boolean;
+  subscriptionCancelled: boolean;
 }
 
 const DEFAULT_PREFS: NotificationPreferences = {
@@ -17,8 +18,9 @@ const DEFAULT_PREFS: NotificationPreferences = {
   deadlineApproaching: true,
   invoiceReleased: true,
   invoiceRefunded: true,
-  agingAlert: true,
-  backupFailure: true,
+  subscriptionBilling: true,
+  subscriptionPaused: true,
+  subscriptionCancelled: true,
 };
 
 function getPreferences(): NotificationPreferences {
@@ -134,27 +136,33 @@ export function notifyInvoiceRefunded(invoiceId: string): void {
   });
 }
 
-/** Notify when an invoice crosses an aging threshold (e.g. 30/60/90 days). */
-export function notifyInvoiceAging(
-  invoiceId: string,
-  bucketLabel: string,
-  daysOverdue: number
-): void {
+/** Notify when a subscription billing charge occurs. */
+export function notifySubscriptionBilling(subId: string, amountLabel: string): void {
   const prefs = getPreferences();
-  if (!prefs.agingAlert) return;
-  sendBrowserNotification(`Invoice #${invoiceId} is aging (${bucketLabel})`, {
-    body: `${daysOverdue} day${daysOverdue !== 1 ? 's' : ''} overdue.`,
-    tag: `aging-alert-${invoiceId}-${bucketLabel}`,
+  if (!prefs.subscriptionBilling) return;
+  sendBrowserNotification(`Subscription #${subId} billed`, {
+    body: `${amountLabel} USDC charged for your subscription.`,
+    tag: `subscription-billing-${subId}`,
   });
 }
 
-/** Notify when an automated backup run fails. */
-export function notifyBackupFailure(reason: string, runId?: string): void {
+/** Notify when a subscription is paused. */
+export function notifySubscriptionPaused(subId: string): void {
   const prefs = getPreferences();
-  if (!prefs.backupFailure) return;
-  sendBrowserNotification("Automated backup failed", {
-    body: reason,
-    tag: runId ? `backup-failure-${runId}` : "backup-failure",
+  if (!prefs.subscriptionPaused) return;
+  sendBrowserNotification(`Subscription #${subId} paused`, {
+    body: "Billing is paused until you resume the subscription.",
+    tag: `subscription-paused-${subId}`,
+  });
+}
+
+/** Notify when a subscription is cancelled, including the recorded reason. */
+export function notifySubscriptionCancelled(subId: string, reason: string): void {
+  const prefs = getPreferences();
+  if (!prefs.subscriptionCancelled) return;
+  sendBrowserNotification(`Subscription #${subId} cancelled`, {
+    body: reason ? `Reason: ${reason}` : "The subscription has been cancelled.",
+    tag: `subscription-cancelled-${subId}`,
   });
 }
 

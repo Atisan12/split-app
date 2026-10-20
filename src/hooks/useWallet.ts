@@ -3,132 +3,108 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import {
   connectFreighter,
+  connectWalletConnect,
   disconnectWalletConnect,
   getFreighterPublicKey,
   getWalletConnectPublicKey,
 } from "@/lib/freighter";
 import type { WalletType } from "@/lib/freighter";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
-import type { WalletConnectStatus } from "@/hooks/useWalletConnect";
+import {
+  connectLedger,
+  getLedgerPublicKey,
+  getLedgerStatus,
+  DEFAULT_LEDGER_DERIVATION_PATH,
+} from "@/lib/ledger";
+import type { LedgerStatus } from "@/lib/ledger";
 
 const STORAGE_KEY = "stellarsplit_wallet";
-const PRIVACY_KEY = "stellarsplit_wallet_persistence";
+const DERIVATION_PATH_KEY = "stellarsplit_ledger_derivation_path";
 
-export interface WalletConnection {
+interface CachedWallet {
   address: string;
   walletType: WalletType;
-  timestamp: number;
 }
 
 interface WalletState {
-  connections: WalletConnection[];
-  activeAddress: string | null;
-  activeWalletType: WalletType | null;
+  address: string | null;
+  walletType: WalletType | null;
   connecting: boolean;
   error: string | null;
   freighterInstalled: boolean | null;
+  ledgerStatus: LedgerStatus;
+  derivationPath: string;
 }
 
-/**
- * Whether the user has opted in to persisting their wallet connection across
- * sessions. Defaults to enabled unless explicitly disabled.
- */
-function isPersistenceEnabled(): boolean {
-  if (typeof window === "undefined") return false;
+function readDerivationPath(): string {
+  if (typeof window === "undefined") return DEFAULT_LEDGER_DERIVATION_PATH;
   try {
-    return window.localStorage.getItem(PRIVACY_KEY) !== "disabled";
+    return window.localStorage.getItem(DERIVATION_PATH_KEY) || DEFAULT_LEDGER_DERIVATION_PATH;
   } catch {
-    return false;
+    return DEFAULT_LEDGER_DERIVATION_PATH;
+  }
+}
+
+function writeDerivationPath(path: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(DERIVATION_PATH_KEY, path);
+  } catch {
+    // localStorage unavailable — path just won't persist across a refresh.
   }
 }
 
 function readCache(): CachedWallet | null {
   if (typeof window === "undefined") return null;
-  if (!isPersistenceEnabled()) return null;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (
-      typeof parsed?.address === "string" &&
-      typeof parsed?.walletType === "string" &&
-      typeof parsed?.timestamp === "number"
-    ) {
+    if (typeof parsed?.address === "string" && typeof parsed?.walletType === "string") {
       return parsed as CachedWallet;
     }
-    return empty;
+    return null;
   } catch {
-    return empty;
+    return null;
   }
 }
 
-function writeCache(wallets: PersistedWallets) {
+function writeCache(wallet: CachedWallet | null) {
   if (typeof window === "undefined") return;
   try {
     if (!wallet) {
-      window.localStorage.removeItem(STORAGE_KEY);
-    } else if (isPersistenceEnabled()) {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(wallet));
-    }
-  } catch {
-    // localStorage unavailable (private mode, etc.) — connection state
-    // just won't persist across a refresh.
-  }
-}
-
-function toPersisted(state: WalletState): PersistedWallets {
-  return { connections: state.connections, activeAddress: state.activeAddress };
-}
-
-function activeType(
-  connections: WalletConnection[],
-  activeAddress: string | null
-): WalletType | null {
-  if (!activeAddress) return null;
-  return connections.find((c) => c.address === activeAddress)?.walletType ?? null;
-}
-
-/**
- * Enable or disable persistence of the wallet connection across sessions.
- * Disabling also clears any stored connection data.
- */
-export function setWalletPersistence(enabled: boolean) {
-  if (typeof window === "undefined") return;
-  try {
-    if (enabled) {
-      window.localStorage.removeItem(PRIVACY_KEY);
+      window.sessionStorage.removeItem(STORAGE_KEY);
     } else {
-      window.localStorage.setItem(PRIVACY_KEY, "disabled");
-      window.localStorage.removeItem(STORAGE_KEY);
+      window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(wallet));
     }
   } catch {
-    // ignore storage failures
+    // sessionStorage unavailable (private mode, etc.) — connection state
+    // just won't persist across a refresh.
   }
 }
 
 /**
  * Shared Freighter/WalletConnect connection state.
  *
- * Reads the persisted connection list from localStorage synchronously (so
- * the first paint already reflects previously-granted connections), then
- * silently re-verifies each stored connection against its wallet before
- * paint via useLayoutEffect — no approval popup when the wallet already
- * granted permission. Connections that fail verification are dropped.
+ * Reads any cached public key from sessionStorage synchronously (so the
+ * first paint already reflects a previously-granted connection), then
+ * silently re-verifies it against the wallet extension before paint via
+ * useLayoutEffect — no approval popup when the wallet already granted
+ * permission.
  */
 export function useWallet() {
   const [state, setState] = useState<WalletState>(() => {
     const cached = readCache();
     return {
-      connections: cached.connections,
-      activeAddress: cached.activeAddress,
-      activeWalletType: activeType(cached.connections, cached.activeAddress),
+      address: cached?.address ?? null,
+      walletType: cached?.walletType ?? null,
       connecting: false,
       error: null,
       freighterInstalled: null,
+      ledgerStatus: "disconnected",
+      derivationPath: readDerivationPath(),
     };
   });
 
-  const walletConnect = useWalletConnect();
   const verified = useRef(false);
 
   useLayoutEffect(() => {
@@ -153,58 +129,72 @@ export function useWallet() {
         }
       }
 
-      if (cached.connections.length === 0) return;
-
-      const valid: WalletConnection[] = [];
-      for (const connection of cached.connections) {
-        // For Freighter, only skip straight to getPublicKey() (no popup) when
-        // isConnected() confirms the extension already granted this origin
-        // access. For WalletConnect there's no equivalent probe — fall back
-        // to the existing silent getWalletConnectPublicKey() check.
-        if (connection.walletType === "freighter" && !freighterConnected) continue;
+      if (!cached) return;
 
       // For Freighter, only skip straight to getPublicKey() (no popup) when
       // isConnected() confirms the extension already granted this origin
       // access. For WalletConnect there's no equivalent probe — fall back
-      // to the existing silent getWalletConnectPublicKey() check.
+      // to the existing silent getWalletConnectPublicKey() check. Ledger
+      // requires the device to be reconnected, so it's verified separately.
       if (cached.walletType === "freighter" && !freighterConnected) {
         writeCache(null);
-        setState((prev) => ({
-          ...prev,
-          address: null,
-          walletType: null,
-          error: "Saved wallet connection could not be restored. Please reconnect.",
-        }));
+        setState((prev) => ({ ...prev, address: null, walletType: null }));
         return;
       }
 
-      if (cancelled) return;
+      if (cached.walletType === "ledger") {
+        try {
+          const status = await getLedgerStatus();
+          if (cancelled) return;
+          setState((prev) => ({ ...prev, ledgerStatus: status }));
 
-      const activeAddress =
-        cached.activeAddress && valid.some((c) => c.address === cached.activeAddress)
-          ? cached.activeAddress
-          : valid[0]?.address ?? null;
+          if (status !== "connected") {
+            writeCache(null);
+            setState((prev) => ({ ...prev, address: null, walletType: null }));
+            return;
+          }
+
+          const key = await getLedgerPublicKey(readDerivationPath());
+          if (cancelled) return;
+
+          if (key && key === cached.address) {
+            setState((prev) => ({ ...prev, address: key, walletType: "ledger" }));
+          } else {
+            writeCache(null);
+            setState((prev) => ({ ...prev, address: null, walletType: null }));
+          }
+        } catch {
+          if (!cancelled) {
+            writeCache(null);
+            setState((prev) => ({
+              ...prev,
+              address: null,
+              walletType: null,
+              ledgerStatus: "error",
+            }));
+          }
+        }
+        return;
+      }
+
+      try {
+        const key =
+          cached.walletType === "freighter"
+            ? await getFreighterPublicKey()
+            : await getWalletConnectPublicKey();
+
+        if (cancelled) return;
 
         if (key && key === cached.address) {
           setState((prev) => ({ ...prev, address: key, walletType: cached.walletType }));
         } else {
           writeCache(null);
-          setState((prev) => ({
-            ...prev,
-            address: null,
-            walletType: null,
-            error: "Saved wallet connection could not be restored. Please reconnect.",
-          }));
+          setState((prev) => ({ ...prev, address: null, walletType: null }));
         }
       } catch {
         if (!cancelled) {
           writeCache(null);
-          setState((prev) => ({
-            ...prev,
-            address: null,
-            walletType: null,
-            error: "Saved wallet connection could not be restored. Please reconnect.",
-          }));
+          setState((prev) => ({ ...prev, address: null, walletType: null }));
         }
       }
     };
@@ -216,67 +206,89 @@ export function useWallet() {
     };
   }, []);
 
-  const connect = useCallback(
-    async (type: WalletType) => {
-      setState((prev) => ({ ...prev, connecting: true, error: null }));
-      try {
-        if (type === "freighter") {
-          const address = await connectFreighter();
-          writeCache({ address, walletType: "freighter", timestamp: Date.now() });
-          setState((prev) => ({ ...prev, address, walletType: "freighter", connecting: false }));
-          return { address, walletType: "freighter" as WalletType };
-        }
+  const connect = useCallback(async (type: WalletType) => {
+    setState((prev) => ({ ...prev, connecting: true, error: null }));
+    try {
+      if (type === "freighter") {
+        const address = await connectFreighter();
+        writeCache({ address, walletType: "freighter" });
+        setState((prev) => ({ ...prev, address, walletType: "freighter", connecting: false }));
+        return { address, walletType: "freighter" as WalletType };
+      }
 
-        const { publicKey, uri } = await walletConnect.connect();
-        writeCache({ address: publicKey, walletType: "walletconnect", timestamp: Date.now() });
+      if (type === "ledger") {
+        const path = readDerivationPath();
+        setState((prev) => ({ ...prev, ledgerStatus: "connecting" }));
+        const address = await connectLedger(path);
+        writeCache({ address, walletType: "ledger" });
         setState((prev) => ({
           ...prev,
-          address: publicKey,
-          walletType: "walletconnect",
+          address,
+          walletType: "ledger",
           connecting: false,
+          ledgerStatus: "connected",
+          derivationPath: path,
         }));
-        return { address: publicKey, walletType: "walletconnect" as WalletType, uri };
-      } catch (e) {
-        setState((prev) => ({ ...prev, connecting: false, error: String(e) }));
-        throw e;
+        return { address, walletType: "ledger" as WalletType };
       }
-    },
-    [walletConnect],
-  );
+
+      const { publicKey, uri } = await connectWalletConnect();
+      writeCache({ address: publicKey, walletType: "walletconnect" });
+      setState((prev) => ({ ...prev, address: publicKey, walletType: "walletconnect", connecting: false }));
+      return { address: publicKey, walletType: "walletconnect" as WalletType, uri };
+    } catch (e) {
+      setState((prev) => ({
+        ...prev,
+        connecting: false,
+        error: String(e),
+        ledgerStatus: type === "ledger" ? "error" : prev.ledgerStatus,
+      }));
+      throw e;
+    }
+  }, []);
+
+  const setDerivationPath = useCallback((path: string) => {
+    writeDerivationPath(path);
+    setState((prev) => ({ ...prev, derivationPath: path }));
+  }, []);
+
+  const refreshLedgerStatus = useCallback(async () => {
+    try {
+      const status = await getLedgerStatus();
+      setState((prev) => ({ ...prev, ledgerStatus: status }));
+      return status;
+    } catch {
+      setState((prev) => ({ ...prev, ledgerStatus: "error" }));
+      return "error" as LedgerStatus;
+    }
+  }, []);
 
   const disconnect = useCallback(async () => {
     if (state.walletType === "walletconnect") {
-      try {
-        await walletConnect.disconnect();
-      } catch {
-        // fall through to the low-level disconnect as a best effort
-      }
       await disconnectWalletConnect();
     }
     writeCache(null);
-    setState((prev) => ({ ...prev, address: null, walletType: null, error: null }));
-  }, [state.walletType, walletConnect]);
-
-  const wcStatus: WalletConnectStatus = walletConnect.status;
+    setState((prev) => ({
+      ...prev,
+      address: null,
+      walletType: null,
+      error: null,
+      ledgerStatus: prev.walletType === "ledger" ? "disconnected" : prev.ledgerStatus,
+    }));
+  }, [state.walletType]);
 
   return {
-    address: state.activeAddress,
-    walletType: state.activeWalletType,
-    connections: state.connections,
-    activeAddress: state.activeAddress,
-    activeWalletType: state.activeWalletType,
+    address: state.address,
+    walletType: state.walletType,
     connecting: state.connecting,
     error: state.error,
     freighterInstalled: state.freighterInstalled,
+    ledgerStatus: state.ledgerStatus,
+    derivationPath: state.derivationPath,
+    setDerivationPath,
+    refreshLedgerStatus,
     connect,
-    switchTo,
     disconnect,
-    // WalletConnect v2 pairing/connection state (#884)
-    wcStatus,
-    wcUri: walletConnect.uri,
-    wcRetrying: walletConnect.retrying,
-    wcRetry: walletConnect.retry,
-    wcCancel: walletConnect.cancel,
   };
 }
 
