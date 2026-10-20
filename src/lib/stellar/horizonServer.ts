@@ -36,17 +36,45 @@ export async function fetchInvoicesForAddress(
   const startId = cursor ? parseInt(cursor, 10) + 1 : 1;
 
   const results: Invoice[] = [];
+  const maxId = startId + limit * 10;
+  // Fetch ids in parallel batches instead of one-by-one sequential awaits:
+  // each `getInvoice` is an independent RPC/cache call, so awaiting them
+  // serially in a for-loop (the previous behavior) multiplies round-trip
+  // latency by the number of ids scanned. Batching with Promise.all lets
+  // the cache/RPC calls for a batch fly concurrently.
+  const BATCH_SIZE = 10;
+  let reachedEnd = false;
 
-  for (let id = startId; results.length < limit; id++) {
-    if (id > startId + limit * 10) break;
+  for (let batchStart = startId; results.length < limit && batchStart <= maxId && !reachedEnd; batchStart += BATCH_SIZE) {
+    const batchIds = Array.from(
+      { length: Math.min(BATCH_SIZE, maxId - batchStart + 1) },
+      (_, i) => batchStart + i
+    );
 
-    try {
-      // Cached: the dashboard/infinite-scroll list re-scans the same id
-      // range on every page load and poll, so this collapses repeat RPC
-      // calls for invoices that haven't changed in the last few seconds.
-      const inv = await blockchainCache.getOrFetch("invoice", String(id), () =>
-        splitClient.getInvoice(String(id))
-      );
+    const batchResults = await Promise.all(
+      batchIds.map(async (id) => {
+        try {
+          // Cached: the dashboard/infinite-scroll list re-scans the same id
+          // range on every page load and poll, so this collapses repeat RPC
+          // calls for invoices that haven't changed in the last few seconds.
+          const inv = await blockchainCache.getOrFetch("invoice", String(id), () =>
+            splitClient.getInvoice(String(id))
+          );
+          return { id, inv, ended: false };
+        } catch {
+          // splitClient throws when the invoice id does not exist — end of list.
+          return { id, inv: null, ended: true };
+        }
+      })
+    );
+
+    for (const { inv, ended } of batchResults) {
+      if (ended) {
+        reachedEnd = true;
+        break;
+      }
+      if (!inv) continue;
+
       const mine =
         inv.creator === publicKey || inv.recipients.some((r) => r.address === publicKey);
 
@@ -60,12 +88,10 @@ export async function fetchInvoicesForAddress(
           results.push(inv);
         }
       }
-    } catch {
-      // splitClient throws when the invoice id does not exist — end of list.
-      return { invoices: results, nextCursor: null };
+      if (results.length >= limit) break;
     }
   }
 
   const nextCursor = results.length === limit ? String(results[results.length - 1].id) : null;
-  return { invoices: results, nextCursor };
+  return { invoices: results.slice(0, limit), nextCursor };
 }
