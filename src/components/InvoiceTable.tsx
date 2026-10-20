@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef, memo } from "react";
 import type { Invoice } from "@stellar-split/sdk";
 import { formatAmount } from "@stellar-split/sdk";
 import { getInvoiceDisplayStatus } from "@/lib/dashboardFilters";
@@ -100,7 +100,13 @@ const STATUS_STYLES: Record<string, string> = {
   Refunded: "bg-gray-500/20 text-gray-400",
 };
 
-function StatusChip({ status }: { status: string }) {
+// Rendered once per row (potentially hundreds of rows). Its only prop is a
+// primitive status string, so React.memo's default shallow comparison lets
+// unaffected rows skip re-rendering this chip when the table re-renders for
+// an unrelated reason (sort change, selection toggle on another row, column
+// visibility toggle, etc.) — those re-render the parent row but this
+// specific status string is almost always unchanged.
+const StatusChip = memo(function StatusChip({ status }: { status: string }) {
   const style = STATUS_STYLES[status] ?? "bg-gray-500/20 text-gray-400";
   return (
     <span
@@ -110,7 +116,7 @@ function StatusChip({ status }: { status: string }) {
       {status}
     </span>
   );
-}
+});
 
 // ── Sort header button ────────────────────────────────────────────────────────
 
