@@ -1,13 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect } from "react";
-import {
-  classifyError,
-  getErrorTemplate,
-  getRecoverySuggestions,
-} from "@/lib/errors";
-import { logger } from "@/lib/logger";
+import * as Sentry from "@sentry/nextjs";
 
 interface Props {
   error: Error & { digest?: string };
@@ -15,18 +11,24 @@ interface Props {
 }
 
 export default function GlobalError({ error, reset }: Props) {
-  const errorType = classifyError(error);
-  const template = getErrorTemplate(errorType);
-  const suggestions = getRecoverySuggestions(errorType);
+  const pathname = usePathname();
 
   useEffect(() => {
-    logger.error("[GlobalError]", {
-      type: errorType,
+    console.error("[GlobalError]", {
       message: error.message,
       digest: error.digest,
       stack: error.stack,
     });
-  }, [error, errorType]);
+
+    Sentry.withScope((scope) => {
+      scope.setTag("error_boundary", "app/error");
+      if (error.digest) {
+        scope.setTag("digest", error.digest);
+      }
+      scope.setContext("route", { pathname });
+      Sentry.captureException(error);
+    });
+  }, [error, pathname]);
 
   return (
     <main className="min-h-screen bg-gray-950 text-gray-100 flex items-center justify-center px-4">
@@ -35,17 +37,11 @@ export default function GlobalError({ error, reset }: Props) {
           StellarSplit
         </span>
         <div className="flex flex-col gap-2">
-          <h1 className="text-2xl font-bold">{template.title}</h1>
-          <p className="text-gray-400 text-sm">{template.message}</p>
+          <h1 className="text-2xl font-bold">Something went wrong</h1>
+          <p className="text-gray-400 text-sm">
+            An unexpected error occurred. You can try again or return home.
+          </p>
         </div>
-
-        {suggestions.length > 0 && (
-          <ul className="w-full text-left text-sm text-gray-400 list-disc list-inside flex flex-col gap-1">
-            {suggestions.map((suggestion) => (
-              <li key={suggestion}>{suggestion}</li>
-            ))}
-          </ul>
-        )}
 
         <div className="flex gap-3">
           <button
@@ -53,7 +49,7 @@ export default function GlobalError({ error, reset }: Props) {
             onClick={reset}
             className="min-h-11 px-6 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
           >
-            {template.retryLabel}
+            Try Again
           </button>
           <Link
             href="/"

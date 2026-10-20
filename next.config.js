@@ -127,6 +127,13 @@ const sentryWebpackPluginOptions = {
   project: process.env.SENTRY_PROJECT,
   authToken: process.env.SENTRY_AUTH_TOKEN,
   silent: true,
+  // Hide source maps from the client bundle; they are uploaded to Sentry instead.
+  hideSourceMaps: true,
+  // Upload source maps for all client files, not just the ones referenced in the bundle.
+  widenClientFileUpload: true,
+  // Route Sentry requests through a same-origin tunnel to avoid ad-blockers.
+  tunnelRoute: '/monitoring',
+  // Only run the Sentry webpack plugins when a DSN is configured.
   disableServerWebpackPlugin: !process.env.NEXT_PUBLIC_SENTRY_DSN,
   disableClientWebpackPlugin: !process.env.NEXT_PUBLIC_SENTRY_DSN,
 };

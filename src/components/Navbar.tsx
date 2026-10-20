@@ -11,6 +11,8 @@ import NetworkStatus from "@/components/NetworkStatus";
 import NetworkSelector from "@/components/NetworkSelector";
 import GlobalSearch from "@/components/GlobalSearch";
 import MobileSidebar from "@/components/layout/MobileSidebar";
+import Breadcrumb from "@/components/Breadcrumb";
+import HelpTooltip from "@/components/HelpTooltip";
 
 const NAV_LINKS = [
   { href: "/dashboard",            label: "Dashboard" },
@@ -115,6 +117,11 @@ export default function Navbar() {
               <SimulationModeToggle />
               <NotificationCenter />
               <HeaderShortcutsButton />
+              <HelpTooltip
+                content="Open the user guide to learn about invoices, subscriptions, groups, and more."
+                href="/help"
+                label="Help and user guide"
+              />
             </div>
             <ThemeToggle />
 
@@ -144,6 +151,15 @@ export default function Navbar() {
           </div>
         </div>
       </header>
+
+      {/* Contextual breadcrumb trail — hidden on the home route */}
+      {pathname !== "/" && (
+        <div className="border-b border-white/[0.06] bg-surface-900/80">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 py-2">
+            <Breadcrumb />
+          </div>
+        </div>
+      )}
 
       {/* Slide-in sidebar for below lg */}
       <MobileSidebar
