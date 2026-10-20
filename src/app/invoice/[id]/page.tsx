@@ -82,7 +82,10 @@ import InvoiceSentiment from "@/components/invoice/InvoiceSentiment";
 import PayerWalletHealth from "@/components/invoice/PayerWalletHealth";
 import ReconciliationPanel from "@/components/invoice/ReconciliationPanel";
 import InvoiceExportButton from "@/components/InvoiceExportButton";
-import ReleaseBanner from "@/components/ReleaseBanner";
+// Only rendered once an invoice transitions to "released", and pulls in the
+// canvas-confetti animation library — load it on demand instead of in the
+// page's initial bundle.
+const ReleaseBanner = dynamic(() => import("@/components/ReleaseBanner"), { ssr: false });
 import { cancelReminder, setReminder } from "@/lib/reminders";
 import { recordCooldown } from "@/lib/cooldown";
 import { exportTimelineAsImage } from "@/lib/timelineImageExport";

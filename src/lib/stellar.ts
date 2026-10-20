@@ -243,6 +243,16 @@ export async function fetchUsdcBalance(
   walletAddress: string,
   tokenContractId = USDC_CONTRACT_ID
 ): Promise<bigint> {
+  const cacheKey = `${walletAddress}:${tokenContractId}`;
+  return blockchainCache.getOrFetch("balance", cacheKey, () =>
+    fetchUsdcBalanceUncached(walletAddress, tokenContractId)
+  );
+}
+
+async function fetchUsdcBalanceUncached(
+  walletAddress: string,
+  tokenContractId: string
+): Promise<bigint> {
   const {
     Contract,
     Address,
