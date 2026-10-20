@@ -68,6 +68,15 @@ Open [http://localhost:3000](http://localhost:3000).
 | `/invoice/[id]` | Invoice detail, payment progress, Pay button |
 | `/verify/[id]` | Public on-chain verification (no login needed) |
 
+## Continuous Testing (Local Dev)
+
+Run tests continuously while developing, instead of a single one-off run:
+
+```bash
+npm run test:watch       # vitest in watch mode, scoped to files changed vs. the last commit
+npm run test:watch:all   # vitest in watch mode, full suite
+```
+
 ## Run Lint
 
 ```bash
