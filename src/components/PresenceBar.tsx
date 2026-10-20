@@ -48,6 +48,8 @@ function Avatar({ presence, isCurrentUser }: AvatarProps) {
             src={presence.avatarUrl}
             alt={presence.displayName}
             className="w-full h-full rounded-full object-cover"
+            loading="lazy"
+            decoding="async"
           />
         ) : (
           initials

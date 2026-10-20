@@ -109,6 +109,8 @@ const CreatorMarketplace: React.FC<CreatorMarketplaceProps> = ({
                         src={match.creator.avatarUrl}
                         alt={match.creator.name}
                         className="h-10 w-10 rounded-full object-cover"
+                        loading="lazy"
+                        decoding="async"
                       />
                     ) : (
                       <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-medium">
