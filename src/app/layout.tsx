@@ -25,6 +25,7 @@ import OfflineBanner from "@/components/OfflineBanner";
 import WalletSecurityCenter from "@/components/security/WalletSecurityCenter";
 import { getNonce } from "@/lib/csp";
 import TransitionProvider from "@/components/layout/TransitionProvider";
+import WebVitalsReporter from "@/components/WebVitalsReporter";
 
 const themeBootstrap = `
 (function () {
@@ -132,6 +133,7 @@ export default function RootLayout({
                       <UserPreferencesProvider>
                         <FiatRateProvider>
                           <ShortcutRegistryProvider>
+                            <WebVitalsReporter />
                             <Navbar />
                             <SimulationBanner />
                             <UpgradeBanner />
