@@ -2,6 +2,12 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { logger } from "@/lib/logger";
+import {
+  classifyError,
+  getErrorTemplate,
+  type ErrorKind,
+} from "@/lib/errors";
 
 interface Props {
   error: Error & { digest?: string };
@@ -11,6 +17,7 @@ interface Props {
 /** Route-level error boundary for invoice detail pages. */
 export default function InvoiceError({ error, reset }: Props) {
   const [sentryEventId, setSentryEventId] = useState<string | null>(null);
+  const [kind] = useState<ErrorKind>(() => classifyError(error));
 
   useEffect(() => {
     const capture = async () => {
@@ -23,15 +30,27 @@ export default function InvoiceError({ error, reset }: Props) {
       }
     };
     capture();
-    console.error("[InvoiceError]", error);
-  }, [error]);
+    logger.error("Invoice detail page failed to load", {
+      scope: "InvoiceError",
+      kind,
+      digest: error.digest,
+      error,
+    });
+  }, [error, kind]);
+
+  const template = getErrorTemplate(kind);
 
   return (
     <main className="max-w-xl mx-auto px-4 py-20 text-center">
-      <h1 className="text-2xl font-bold mb-2">Could not load invoice</h1>
-      <p className="text-gray-400 text-sm mb-6">
-        {error.message || "An unexpected error occurred."}
-      </p>
+      <h1 className="text-2xl font-bold mb-2">{template.title}</h1>
+      <p className="text-gray-400 text-sm mb-6">{template.message}</p>
+      {template.suggestions.length > 0 && (
+        <ul className="text-sm text-gray-400 text-left mb-6 space-y-1 list-disc list-inside">
+          {template.suggestions.map((suggestion) => (
+            <li key={suggestion}>{suggestion}</li>
+          ))}
+        </ul>
+      )}
       {sentryEventId && (
         <p className="text-xs text-gray-500 font-mono mb-4">
           Error ID: {sentryEventId}

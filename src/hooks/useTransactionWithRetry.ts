@@ -1,13 +1,16 @@
 import { useCallback, useRef, useState } from 'react';
 import { useToast } from '@/contexts/ToastContext';
+import {
+  retryWithBackoff,
+  isRetryableError,
+  type RetryMetrics,
+} from '@/utils/retryWithBackoff';
 
 interface RetryOptions {
   maxRetries?: number;
   initialDelayMs?: number;
   retryableStatusCodes?: number[];
 }
-
-const MAX_DELAY_MS = 30000;
 
 const DEFAULT_OPTIONS = {
   maxRetries: 5,
@@ -19,96 +22,62 @@ export function useTransactionWithRetry(options?: RetryOptions) {
   const toast = useToast();
   const abortControllers = useRef<Map<string, AbortController>>(new Map());
   const [attemptCount, setAttemptCount] = useState(0);
+  const [metrics, setMetrics] = useState<RetryMetrics | null>(null);
   const opts = { ...DEFAULT_OPTIONS, ...options };
-
-  const getStatusCode = (error: any): number | undefined => {
-    return error?.response?.status || error?.status;
-  };
-
-  const delay = (ms: number, operationId: string): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      const startTime = Date.now();
-      const checkInterval = setInterval(() => {
-        if (abortControllers.current.get(operationId)?.signal.aborted) {
-          clearInterval(checkInterval);
-          reject(new Error('Transaction cancelled by user'));
-          return;
-        }
-        if (Date.now() - startTime >= ms) {
-          clearInterval(checkInterval);
-          resolve();
-        }
-      }, 100);
-    });
-  };
 
   const executeWithRetry = useCallback(
     async <T,>(
       fn: () => Promise<T>,
       operationId: string = `op-${Date.now()}-${Math.random()}`
     ): Promise<T> => {
-      let lastError: Error | null = null;
       let toastId: string | null = null;
 
-      for (let attempt = 1; attempt <= opts.maxRetries; attempt++) {
-        setAttemptCount(attempt);
-        try {
-          // Check if user cancelled
-          if (abortControllers.current.get(operationId)?.signal.aborted) {
-            throw new Error('Transaction cancelled by user');
-          }
+      const controller = abortControllers.current.get(operationId);
+      const signal = controller?.signal;
 
-          const result = await fn();
-          if (toastId) toast.dismiss(toastId);
-          return result;
-        } catch (error) {
-          lastError = error instanceof Error ? error : new Error(String(error));
-          const statusCode = getStatusCode(error);
-          const isRetryable =
-            opts.retryableStatusCodes.includes(statusCode!) &&
-            attempt < opts.maxRetries;
-
-          if (isRetryable) {
-            const delayMs = Math.min(
-              opts.initialDelayMs * Math.pow(2, attempt - 1),
-              MAX_DELAY_MS
-            );
+      try {
+        const result = await retryWithBackoff<T>(fn, {
+          maxRetries: opts.maxRetries,
+          initialDelayMs: opts.initialDelayMs,
+          signal,
+          isRetryable: (error) =>
+            isRetryableError(error, opts.retryableStatusCodes),
+          onAttempt: (attempt) => {
+            setAttemptCount(attempt);
+          },
+          onRetry: ({ attempt, delayMs, error }) => {
             const countdownSeconds = Math.ceil(delayMs / 1000);
-
-            // Show countdown toast
-            const message = `Rate limited. Retrying in ${countdownSeconds}s...`;
-            toastId = toast.info(message);
-
-            // Wait with cancellation support
-            try {
-              await delay(delayMs, operationId);
-            } catch (e) {
-              if (toastId) toast.dismiss(toastId);
-              throw e;
-            }
-          } else {
-            // Non-retryable error or max retries exceeded
-            const errorMsg = lastError?.message || 'Transaction failed';
-            const isMaxRetries = attempt === opts.maxRetries;
-
+            const reason =
+              (error as any)?.response?.status === 429 ||
+              (error as any)?.status === 429
+                ? 'Rate limited'
+                : 'Transient error';
             if (toastId) toast.dismiss(toastId);
+            toastId = toast.info(
+              `${reason}. Retrying in ${countdownSeconds}s... (attempt ${attempt}/${opts.maxRetries})`
+            );
+          },
+          onMetrics: (m) => {
+            setMetrics(m);
+          },
+        });
 
-            if (isMaxRetries && opts.retryableStatusCodes.includes(statusCode!)) {
-              // Max retries for rate limit
-              toast.error(`${errorMsg}. Please try again later.`);
-            } else {
-              // Other errors
-              toast.error(errorMsg);
-            }
+        if (toastId) toast.dismiss(toastId);
+        return result;
+      } catch (error) {
+        if (toastId) toast.dismiss(toastId);
 
-            throw lastError;
-          }
+        const err = error instanceof Error ? error : new Error(String(error));
+        const wasRetryable = isRetryableError(err, opts.retryableStatusCodes);
+
+        if (wasRetryable) {
+          toast.error(`${err.message}. Please try again later.`);
+        } else {
+          toast.error(err.message || 'Transaction failed');
         }
-      }
 
-      // Should not reach here but fallback
-      if (toastId) toast.dismiss(toastId);
-      throw lastError || new Error('Transaction failed');
+        throw err;
+      }
     },
     [opts, toast]
   );
@@ -121,5 +90,5 @@ export function useTransactionWithRetry(options?: RetryOptions) {
     }
   }, []);
 
-  return { executeWithRetry, cancel, attemptCount };
+  return { executeWithRetry, cancel, attemptCount, metrics };
 }

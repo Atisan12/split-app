@@ -1,90 +1,129 @@
 /**
  * App-level Stellar / Soroban configuration.
- * Resolved from the active network (see `src/lib/networks.ts`) so settings
- * pages can import a single module.
+ * Mirrors env vars used by `src/lib/stellar.ts` so settings pages can import a single module.
  */
-import { getActiveNetwork } from "./networks";
 
-const active = getActiveNetwork();
+export const STELLAR_NETWORK =
+  process.env.NEXT_PUBLIC_STELLAR_NETWORK === "mainnet" ? "mainnet" : "testnet";
 
-/** "custom" networks are reported by their passphrase family for callers that only know testnet/mainnet. */
-export const STELLAR_NETWORK: "mainnet" | "testnet" =
-  active.id === "mainnet" || (active.id === "custom" && active.explorerTxBase.includes("/public/"))
-    ? "mainnet"
-    : "testnet";
-
-export const RPC_URL = active.rpcUrl;
+export const RPC_URL =
+  process.env.NEXT_PUBLIC_RPC_URL ??
+  (STELLAR_NETWORK === "mainnet"
+    ? "https://soroban.stellar.org"
+    : "https://soroban-testnet.stellar.org");
 
 /** StellarSplit contract ID used for on-chain calls and event filtering. */
-export const contractId = active.contractId;
+export const contractId = process.env.NEXT_PUBLIC_CONTRACT_ID ?? "";
 
 /**
- * WalletConnect v2 configuration (#884).
- *
- * The project ID is required for the WalletConnect Cloud relay; when it is
- * missing the WalletConnect service should surface a clear error rather than
- * attempting to connect.
+ * Parse a positive integer env var, falling back to a default when unset or invalid.
  */
-export const WALLETCONNECT_PROJECT_ID =
-  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? "";
+function positiveIntEnv(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
-export const WALLETCONNECT_RELAY_URL =
-  process.env.NEXT_PUBLIC_WALLETCONNECT_RELAY_URL ?? "wss://relay.walletconnect.com";
+/**
+ * Parse a non-negative number env var (e.g. jitter factor), falling back when invalid.
+ */
+function nonNegativeFloatEnv(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
 
-/** CAIP-2 chain identifiers for the Stellar networks we support. */
-export const STELLAR_CHAIN_IDS = {
-  mainnet: "stellar:pubnet",
-  testnet: "stellar:testnet",
+/**
+ * Parse a boolean env var ("true"/"1" => true, "false"/"0" => false).
+ */
+function boolEnv(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined || value.trim() === "") return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1") return true;
+  if (normalized === "false" || normalized === "0") return false;
+  return fallback;
+}
+
+/** Retry / exponential backoff configuration. */
+export interface RetryConfig {
+  /** Maximum number of retry attempts after the initial failure. */
+  maxRetries: number;
+  /** Base delay (ms) used for the first backoff interval. */
+  baseDelayMs: number;
+  /** Upper bound (ms) for any single backoff interval. */
+  maxDelayMs: number;
+  /** Random jitter factor (0..1) applied to each delay to avoid thundering herd. */
+  jitterFactor: number;
+  /** Whether automatic retries are enabled. */
+  enabled: boolean;
+  /** Whether to surface retry notifications to the user. */
+  notify: boolean;
+}
+
+/** Offline queue configuration for failed transactions. */
+export interface OfflineQueueConfig {
+  /** Maximum number of operations held in the queue. */
+  maxSize: number;
+  /** Storage key used to persist the queue across restarts. */
+  storageKey: string;
+  /** Whether the offline queue is enabled. */
+  enabled: boolean;
+  /** Whether to automatically flush the queue when connectivity is restored. */
+  autoRetryOnReconnect: boolean;
+  /** Whether to notify the user of queue status changes. */
+  notify: boolean;
+  /** Maximum age (ms) of a queued item before it is considered stale. */
+  maxItemAgeMs: number;
+}
+
+/** Feature flags for retry and offline queue behavior. */
+export interface RetryFeatureFlags {
+  retry: boolean;
+  offlineQueue: boolean;
+  retryMetrics: boolean;
+}
+
+export const RETRY_CONFIG: RetryConfig = {
+  maxRetries: positiveIntEnv(process.env.NEXT_PUBLIC_MAX_RETRIES, 5),
+  baseDelayMs: positiveIntEnv(process.env.NEXT_PUBLIC_RETRY_BASE_DELAY_MS, 500),
+  maxDelayMs: positiveIntEnv(process.env.NEXT_PUBLIC_RETRY_MAX_DELAY_MS, 30_000),
+  jitterFactor: Math.min(
+    1,
+    nonNegativeFloatEnv(process.env.NEXT_PUBLIC_RETRY_JITTER_FACTOR, 0.2),
+  ),
+  enabled: boolEnv(process.env.NEXT_PUBLIC_RETRY_ENABLED, true),
+  notify: boolEnv(process.env.NEXT_PUBLIC_RETRY_NOTIFY, true),
 } as const;
 
-export type StellarChainId = (typeof STELLAR_CHAIN_IDS)[keyof typeof STELLAR_CHAIN_IDS];
-
-/** Chain IDs advertised to mobile wallets during session proposal. */
-export const SUPPORTED_CHAIN_IDS: readonly StellarChainId[] = [
-  STELLAR_CHAIN_IDS.mainnet,
-  STELLAR_CHAIN_IDS.testnet,
-];
-
-/** The chain ID matching the currently configured network. */
-export const ACTIVE_CHAIN_ID: StellarChainId = STELLAR_CHAIN_IDS[STELLAR_NETWORK];
-
-/** Session lifetime before the pairing is considered stale (ms). */
-export const WALLETCONNECT_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
-
-/** Timeout for a single signing request round-trip (ms). */
-export const WALLETCONNECT_SIGN_TIMEOUT_MS = 60 * 1000;
-
-/** Retry policy for transient relay / signing failures. */
-export const WALLETCONNECT_RETRY_POLICY = {
-  maxAttempts: 3,
-  initialDelayMs: 1000,
-  maxDelayMs: 8000,
-  backoffFactor: 2,
+export const OFFLINE_QUEUE_CONFIG: OfflineQueueConfig = {
+  maxSize: positiveIntEnv(process.env.NEXT_PUBLIC_OFFLINE_QUEUE_MAX_SIZE, 50),
+  storageKey:
+    process.env.NEXT_PUBLIC_OFFLINE_QUEUE_STORAGE_KEY ?? "stellarsplit:offline-queue",
+  enabled: boolEnv(process.env.NEXT_PUBLIC_OFFLINE_QUEUE_ENABLED, true),
+  autoRetryOnReconnect: boolEnv(
+    process.env.NEXT_PUBLIC_OFFLINE_QUEUE_AUTO_RETRY,
+    true,
+  ),
+  notify: boolEnv(process.env.NEXT_PUBLIC_OFFLINE_QUEUE_NOTIFY, true),
+  maxItemAgeMs: positiveIntEnv(
+    process.env.NEXT_PUBLIC_OFFLINE_QUEUE_MAX_ITEM_AGE_MS,
+    24 * 60 * 60 * 1000,
+  ),
 } as const;
 
-export const walletConnectConfig = {
-  projectId: WALLETCONNECT_PROJECT_ID,
-  relayUrl: WALLETCONNECT_RELAY_URL,
-  metadata: {
-    name: "StellarSplit",
-    description: "Split and settle payments on Stellar",
-    url: process.env.NEXT_PUBLIC_APP_URL ?? "https://stellarsplit.app",
-    icons: ["https://stellarsplit.app/icon.png"],
-  },
-  network: STELLAR_NETWORK,
-  chainIds: SUPPORTED_CHAIN_IDS,
-  activeChainId: ACTIVE_CHAIN_ID,
-  sessionTimeoutMs: WALLETCONNECT_SESSION_TIMEOUT_MS,
-  signTimeoutMs: WALLETCONNECT_SIGN_TIMEOUT_MS,
-  retry: WALLETCONNECT_RETRY_POLICY,
+export const RETRY_FEATURE_FLAGS: RetryFeatureFlags = {
+  retry: RETRY_CONFIG.enabled,
+  offlineQueue: OFFLINE_QUEUE_CONFIG.enabled,
+  retryMetrics: boolEnv(process.env.NEXT_PUBLIC_RETRY_METRICS_ENABLED, true),
 } as const;
 
 export const config = {
   network: STELLAR_NETWORK,
-  networkId: active.id,
   rpcUrl: RPC_URL,
   contractId,
-  walletConnect: walletConnectConfig,
+  retry: RETRY_CONFIG,
+  offlineQueue: OFFLINE_QUEUE_CONFIG,
+  features: RETRY_FEATURE_FLAGS,
 } as const;
 
 export default config;

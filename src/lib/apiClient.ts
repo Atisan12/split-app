@@ -6,9 +6,72 @@
  * on POST/PUT/PATCH/DELETE requests, refreshing the cached token before it
  * expires and transparently retrying once if a request is rejected with 403
  * because the token expired mid-flight.
+ *
+ * Non-OK responses are surfaced as `AppError` instances (see src/lib/errors.ts)
+ * so callers get a stable error code, a user-friendly message and recovery
+ * suggestions. Transient failures (network errors, 5xx, 429) are retried with
+ * exponential backoff + jitter via `retryWithBackoff` (see src/lib/retry.ts),
+ * and retry attempts are announced through `onRetry` so the UI can toast.
  */
 
+import { AppError, ErrorCode, type ErrorCodeValue } from "@/lib/errors";
+import { retryWithBackoff, type RetryEvent } from "@/lib/retry";
+
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/** Options controlling retry behaviour and notifications for `apiFetch`. */
+export interface ApiFetchOptions extends RequestInit {
+  /** Maximum number of retry attempts for transient failures. Defaults to 3. */
+  maxRetries?: number;
+  /** Base delay (ms) for exponential backoff. Defaults to 300ms. */
+  baseDelayMs?: number;
+  /** Maximum delay (ms) between retries. Defaults to 10_000ms. */
+  maxDelayMs?: number;
+  /** Invoked before each retry so the UI can notify the user. */
+  onRetry?: (event: RetryEvent) => void;
+}
+
+/** Maps an HTTP status code to the closest matching `AppError` code. */
+export function statusToErrorCode(status: number): ErrorCodeValue {
+  switch (status) {
+    case 400:
+      return ErrorCode.VALIDATION;
+    case 401:
+      return ErrorCode.UNAUTHORIZED;
+    case 403:
+      return ErrorCode.FORBIDDEN;
+    case 404:
+      return ErrorCode.NOT_FOUND;
+    case 409:
+      return ErrorCode.CONFLICT;
+    case 429:
+      return ErrorCode.RATE_LIMITED;
+    default:
+      if (status >= 500) return ErrorCode.SERVER;
+      return ErrorCode.UNKNOWN;
+  }
+}
+
+/** True for failures worth retrying: network errors, 5xx and 429. */
+export function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+async function toAppError(response: Response): Promise<AppError> {
+  let detail: string | undefined;
+  try {
+    const body = await response.clone().json();
+    detail = typeof body?.message === "string" ? body.message : undefined;
+  } catch {
+    // Body was not JSON; fall back to the status text.
+    detail = response.statusText || undefined;
+  }
+  return new AppError(statusToErrorCode(response.status), {
+    status: response.status,
+    detail,
+    cause: response,
+  });
+}
 
 // Refresh a little early so a request that starts right before expiry
 // doesn't race the server-side clock.
@@ -48,156 +111,64 @@ export function getCachedCsrfExpiry(): number {
 }
 
 /**
- * Lightweight network metrics, used to confirm the impact of compression /
- * batching work (#916). Not sent anywhere by default — callers (e.g. an
- * analytics/monitoring integration) can read `getNetworkMetrics()`.
- */
-interface NetworkMetrics {
-  requestCount: number;
-  totalDurationMs: number;
-  totalResponseBytes: number;
-}
-
-const networkMetrics: NetworkMetrics = {
-  requestCount: 0,
-  totalDurationMs: 0,
-  totalResponseBytes: 0,
-};
-
-function recordNetworkMetric(durationMs: number, response: Response) {
-  networkMetrics.requestCount += 1;
-  networkMetrics.totalDurationMs += durationMs;
-  const contentLength = Number(response.headers.get("content-length") ?? 0);
-  if (!Number.isNaN(contentLength)) {
-    networkMetrics.totalResponseBytes += contentLength;
-  }
-}
-
-export function getNetworkMetrics(): NetworkMetrics {
-  return { ...networkMetrics };
-}
-
-/**
  * fetch() wrapper that attaches a CSRF token to mutating requests and
  * retries once, with a freshly-fetched token, if the server rejects the
  * first attempt with 403.
+ *
+ * Transient failures (network errors, 5xx, 429) are retried with exponential
+ * backoff and jitter. Once retries are exhausted (or for non-retryable
+ * failures) a non-OK response is thrown as an `AppError`.
  */
-export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  const method = (init.method ?? "GET").toUpperCase();
-  const startedAt = Date.now();
-
+export async function apiFetch(
+  input: RequestInfo | URL,
+  init: ApiFetchOptions = {},
+): Promise<Response> {
+  const { maxRetries, baseDelayMs, maxDelayMs, onRetry, ...requestInit } = init;
+  const method = (requestInit.method ?? "GET").toUpperCase();
   if (!MUTATING_METHODS.has(method)) {
-    const response = await fetch(input, init);
-    recordNetworkMetric(Date.now() - startedAt, response);
-    return response;
+    return fetch(input, requestInit);
   }
 
   const attempt = async (token: string) => {
-    const headers = new Headers(init.headers);
+    const headers = new Headers(requestInit.headers);
     headers.set("X-CSRF-Token", token);
-    return fetch(input, { ...init, headers });
+    return fetch(input, { ...requestInit, headers });
   };
 
-  const token = await getCsrfToken();
-  const response = await attempt(token);
-  if (response.status !== 403) {
-    recordNetworkMetric(Date.now() - startedAt, response);
-    return response;
-  }
+  // Single CSRF retry: refresh the token and try again on a 403.
+  const attemptWithCsrfRetry = async (): Promise<Response> => {
+    const token = await getCsrfToken();
+    const response = await attempt(token);
+    if (response.status !== 403) {
+      return response;
+    }
+    const freshToken = await getCsrfToken(true);
+    return attempt(freshToken);
+  };
 
-  const freshToken = await getCsrfToken(true);
-  const retried = await attempt(freshToken);
-  recordNetworkMetric(Date.now() - startedAt, retried);
-  return retried;
-}
+  const response = await retryWithBackoff(
+    async () => {
+      const res = await attemptWithCsrfRetry();
+      if (!res.ok && isRetryableStatus(res.status)) {
+        // Throw so the retry handler treats it as a transient failure.
+        throw await toAppError(res);
+      }
+      return res;
+    },
+    {
+      maxRetries,
+      baseDelayMs,
+      maxDelayMs,
+      onRetry,
+      isRetryable: (error) =>
+        error instanceof AppError
+          ? error.status !== undefined && isRetryableStatus(error.status)
+          : true, // network errors are retryable
+    },
+  );
 
-/**
- * Accounting integration API client (issue #878).
- *
- * These helpers back the payment export / reconciliation integration
- * endpoints. Mutating calls go through `apiFetch` so the CSRF token is
- * attached automatically.
- */
-
-export type AccountingExportFormat = "csv" | "json" | "pdf";
-
-export interface AccountingExportFilters {
-  /** Inclusive ISO date (YYYY-MM-DD) lower bound. */
-  startDate?: string;
-  /** Inclusive ISO date (YYYY-MM-DD) upper bound. */
-  endDate?: string;
-  /** Invoice statuses to include, e.g. ["paid", "pending"]. */
-  statuses?: string[];
-}
-
-export interface AccountingExportPayload extends AccountingExportFilters {
-  format: AccountingExportFormat;
-  /** Optional accounting provider identifier, e.g. "quickbooks". */
-  provider?: string;
-}
-
-export interface AccountingExport {
-  id: string;
-  format: AccountingExportFormat;
-  status: "pending" | "processing" | "completed" | "failed";
-  filters: AccountingExportFilters;
-  provider?: string;
-  downloadUrl?: string;
-  createdAt: string;
-  completedAt?: string;
-}
-
-export interface ReconciliationReport {
-  id?: string;
-  periodStart: string;
-  periodEnd: string;
-  /** Totals keyed by invoice status or provider-specific bucket. */
-  totals: Record<string, number>;
-  lineItems?: Array<Record<string, unknown>>;
-  generatedAt?: string;
-}
-
-async function parseJsonOrThrow<T>(response: Response, action: string): Promise<T> {
   if (!response.ok) {
-    throw new Error(`Failed to ${action}: ${response.status} ${response.statusText}`);
+    throw await toAppError(response);
   }
-  return (await response.json()) as T;
-}
-
-/** Create a new accounting export (CSV, JSON or PDF). */
-export async function createAccountingExport(
-  payload: AccountingExportPayload
-): Promise<AccountingExport> {
-  const response = await apiFetch("/api/accounting/exports", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  return parseJsonOrThrow<AccountingExport>(response, "create accounting export");
-}
-
-/** List previously created accounting exports (export history). */
-export async function listAccountingExports(): Promise<AccountingExport[]> {
-  const response = await apiFetch("/api/accounting/exports", { method: "GET" });
-  return parseJsonOrThrow<AccountingExport[]>(response, "list accounting exports");
-}
-
-/** Fetch a single accounting export by id. */
-export async function getAccountingExport(id: string): Promise<AccountingExport> {
-  const response = await apiFetch(`/api/accounting/exports/${encodeURIComponent(id)}`, {
-    method: "GET",
-  });
-  return parseJsonOrThrow<AccountingExport>(response, "get accounting export");
-}
-
-/** Push a reconciliation report to the accounting integration. */
-export async function pushReconciliationReport(
-  report: ReconciliationReport
-): Promise<ReconciliationReport> {
-  const response = await apiFetch("/api/accounting/reconciliations", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(report),
-  });
-  return parseJsonOrThrow<ReconciliationReport>(response, "push reconciliation report");
+  return response;
 }

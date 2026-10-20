@@ -3,7 +3,8 @@
 import { Component, type ReactNode } from "react";
 import Link from "next/link";
 import WalletConnect from "@/components/WalletConnect";
-import { classifyError } from "@/lib/errors";
+import { classifyError, toAppError, getErrorMessage, getRecoverySuggestions } from "@/lib/errors";
+import { logger } from "@/lib/logger";
 
 interface Props {
   children: ReactNode;
@@ -23,8 +24,15 @@ export default class ErrorBoundary extends Component<Props, State> {
     return { error };
   }
 
-  async componentDidCatch(error: Error) {
-    console.error(error);
+  async componentDidCatch(error: Error, errorInfo: { componentStack?: string | null }) {
+    const appError = toAppError(error);
+    logger.error("Unhandled error caught by root ErrorBoundary", {
+      code: appError.code,
+      message: appError.message,
+      context: appError.context,
+      stack: error.stack,
+      componentStack: errorInfo?.componentStack ?? undefined,
+    });
     try {
       // Sentry is only initialised when NEXT_PUBLIC_SENTRY_DSN is set.
       // Dynamic import keeps it out of the production bundle when unconfigured.
@@ -64,6 +72,9 @@ export default class ErrorBoundary extends Component<Props, State> {
     }
 
     const { kind, message } = classifyError(error);
+    const appError = toAppError(error);
+    const friendlyMessage = getErrorMessage(appError);
+    const suggestions = getRecoverySuggestions(appError);
 
     return (
       <main className="max-w-xl mx-auto w-full px-4 sm:px-6 py-20 overflow-x-hidden">
@@ -71,7 +82,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           {kind === "wallet_not_connected" && (
             <>
               <h1 className="text-xl font-bold">Wallet required</h1>
-              <p className="text-gray-400 text-sm">{message}</p>
+              <p className="text-gray-400 text-sm">{friendlyMessage}</p>
               <WalletConnect />
             </>
           )}
@@ -79,7 +90,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           {kind === "invoice_not_found" && (
             <>
               <h1 className="text-5xl font-bold text-gray-500">404</h1>
-              <p className="text-gray-400 text-sm">{message}</p>
+              <p className="text-gray-400 text-sm">{friendlyMessage}</p>
               <Link
                 href="/dashboard"
                 className="min-h-11 inline-flex items-center px-6 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
@@ -92,7 +103,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           {kind === "rpc_timeout" && (
             <>
               <h1 className="text-xl font-bold">Request timed out</h1>
-              <p className="text-gray-400 text-sm">{message}</p>
+              <p className="text-gray-400 text-sm">{friendlyMessage}</p>
               <button
                 type="button"
                 onClick={this.handleRetry}
@@ -106,7 +117,14 @@ export default class ErrorBoundary extends Component<Props, State> {
           {kind === "unknown" && (
             <>
               <h1 className="text-xl font-bold">Something went wrong</h1>
-              <p className="text-gray-400 text-sm break-words max-w-full">{message}</p>
+              <p className="text-gray-400 text-sm break-words max-w-full">{friendlyMessage}</p>
+              {suggestions.length > 0 && (
+                <ul className="text-sm text-gray-400 list-disc list-inside text-left">
+                  {suggestions.map((suggestion) => (
+                    <li key={suggestion}>{suggestion}</li>
+                  ))}
+                </ul>
+              )}
               {sentryEventId && (
                 <p className="text-xs text-gray-500 font-mono">
                   Error ID: {sentryEventId}
@@ -133,6 +151,12 @@ export default class ErrorBoundary extends Component<Props, State> {
                 >
                   Go to Dashboard
                 </Link>
+                <a
+                  href="mailto:support@stellarsplit.app"
+                  className="min-h-11 inline-flex items-center px-6 py-3 rounded-lg border border-gray-600 hover:border-gray-400 font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                >
+                  Contact Support
+                </a>
               </div>
             </>
           )}

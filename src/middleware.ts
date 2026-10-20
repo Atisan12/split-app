@@ -32,7 +32,14 @@ export const config = {
      * Skip static assets and image optimization files — they carry no
      * inline scripts and re-running CSP generation for every asset request
      * is pure overhead.
+     *
+     * Also skip the interactive API documentation route (/api-docs) and the
+     * static OpenAPI spec (/openapi.json, /openapi.yaml). Swagger UI ships its
+     * own bundled scripts/styles and the spec is a static JSON/YAML document,
+     * so neither needs a per-request CSP nonce. Excluding them lets the
+     * Swagger UI assets load correctly while CSP protections remain in place
+     * for the rest of the app.
      */
-    "/((?!_next/static|_next/image|favicon.ico|icons/|manifest.json|sw.js).*)",
+    "/((?!_next/static|_next/image|favicon.ico|icons/|manifest.json|sw.js|api-docs|openapi\\.(?:json|yaml|yml)).*)",
   ],
 };

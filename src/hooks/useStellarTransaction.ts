@@ -2,11 +2,17 @@
 
 import { useCallback, useRef, useState } from "react";
 import { signTransaction, NETWORK_PASSPHRASE } from "@/lib/freighter";
-import { classifyError } from "@/lib/errors";
+import { classifyError, AppError } from "@/lib/errors";
 import { useToast } from "@/contexts/ToastContext";
-import { getActiveNetwork } from "@/lib/networks";
+import { retryWithBackoff, isRetryableError } from "@/lib/retry";
+import { recordRetryMetric } from "@/lib/retryMetrics";
+import { enqueueTransaction } from "@/lib/offlineQueue";
 
-const HORIZON_URL = getActiveNetwork().horizonUrl;
+const HORIZON_URL =
+  process.env.NEXT_PUBLIC_HORIZON_URL ??
+  (process.env.NEXT_PUBLIC_STELLAR_NETWORK === "mainnet"
+    ? "https://horizon.stellar.org"
+    : "https://horizon-testnet.stellar.org");
 
 /** Poll interval and ceiling for Horizon confirmation. */
 const POLL_INTERVAL_MS = 400;
@@ -80,12 +86,31 @@ export function useStellarTransaction() {
         const server = new Horizon.Server(HORIZON_URL);
         const tx = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
 
-        const submitted = await server.submitTransaction(tx);
+        const onRetry = (attempt: number, error: unknown) => {
+          recordRetryMetric({ operation: "submitTransaction", attempt, error });
+          toast.info(
+            `Network hiccup — retrying transaction (attempt ${attempt})…`
+          );
+        };
+
+        const submitted = await retryWithBackoff(
+          () => server.submitTransaction(tx),
+          { onRetry }
+        );
         const hash = submitted.hash;
 
-        const confirmed = await pollForConfirmation(server, hash);
+        const confirmed = await retryWithBackoff(
+          () => pollForConfirmation(server, hash),
+          { onRetry: (attempt, error) => {
+            recordRetryMetric({ operation: "pollForConfirmation", attempt, error });
+            toast.info(`Still confirming — retrying (attempt ${attempt})…`);
+          } }
+        );
         if (!confirmed) {
-          throw new Error("Transaction did not confirm before timing out.");
+          throw new AppError(
+            "Transaction did not confirm before timing out.",
+            "TIMEOUT"
+          );
         }
 
         setTxHash(hash);
@@ -96,7 +121,19 @@ export function useStellarTransaction() {
         setStatus("error");
         // A user rejection already produced its own toast above.
         if (!isUserRejection(err)) {
-          toast.error(options.errorMessage ?? describeFailure(err));
+          if (isRetryableError(err)) {
+            // Persistent network failure — queue for retry on reconnect.
+            try {
+              await enqueueTransaction(unsignedXdr, options);
+              toast.info(
+                "You appear to be offline. The transaction has been queued and will be retried when your connection is restored."
+              );
+            } catch {
+              toast.error(options.errorMessage ?? describeFailure(err));
+            }
+          } else {
+            toast.error(options.errorMessage ?? describeFailure(err));
+          }
         }
         throw err;
       } finally {
@@ -147,6 +184,9 @@ async function pollForConfirmation(
 
 /** Turn a Horizon or SDK error into something a user can act on. */
 function describeFailure(error: unknown): string {
+  if (error instanceof AppError) {
+    return error.message;
+  }
   const horizonResult = (error as { response?: { data?: { extras?: { result_codes?: { transaction?: string } } } } })
     ?.response?.data?.extras?.result_codes?.transaction;
 
