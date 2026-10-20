@@ -6,8 +6,10 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { getFreighterPublicKey } from "@/lib/freighter";
 import {
   ALLOWED_LOGO_MIME_TYPES,
+  BRAND_FONT_OPTIONS,
   brandSettingsSchema,
   DEFAULT_ACCENT_COLOR,
+  getBrandFontCssFamily,
   isAllowedLogoMimeType,
   isLogoSizeOk,
   LOGO_SIZE_ERROR,
@@ -25,7 +27,7 @@ import {
   uploadBrandLogo,
 } from "@/lib/branding";
 
-const EMPTY_VALUES = { logoUrl: "", accentColor: "", tagline: "" } as const;
+const EMPTY_VALUES = { logoUrl: "", accentColor: "", tagline: "", fontFamily: "" } as const;
 
 const MAX_LOGO_MB = MAX_LOGO_BYTES / (1024 * 1024);
 
@@ -72,6 +74,7 @@ export default function BrandingForm() {
           logoUrl: settings.logoUrl ?? "",
           accentColor: settings.accentColor ?? "",
           tagline: settings.tagline ?? "",
+          fontFamily: settings.fontFamily ?? "",
         });
       })
       .catch(() => {
@@ -88,6 +91,8 @@ export default function BrandingForm() {
   const logoUrl = watch("logoUrl") ?? "";
   const accentColor = watch("accentColor") ?? "";
   const tagline = watch("tagline") ?? "";
+  const fontFamily = watch("fontFamily") ?? "";
+  const previewFontFamily = getBrandFontCssFamily(fontFamily || null);
 
   // Real-time contrast feedback: warn inline as soon as the typed/picked
   // color fails WCAG AA against white — before the user even hits save.
@@ -140,11 +145,13 @@ export default function BrandingForm() {
         logoUrl: data.logoUrl ?? null,
         accentColor: data.accentColor ?? null,
         tagline: data.tagline ?? null,
+        fontFamily: data.fontFamily ?? null,
       });
       reset({
         logoUrl: saved.logoUrl ?? "",
         accentColor: saved.accentColor ?? "",
         tagline: saved.tagline ?? "",
+        fontFamily: saved.fontFamily ?? "",
       });
       setFeedback({ kind: "success", text: "Branding saved — it now applies to all of your invoices." });
     } catch (err) {
@@ -341,12 +348,40 @@ export default function BrandingForm() {
         </div>
       </section>
 
+      {/* ── Font ─────────────────────────────────────────────────────────── */}
+      <section aria-labelledby="branding-font-heading">
+        <h2 id="branding-font-heading" className="text-lg font-semibold mb-1">
+          Invoice font
+        </h2>
+        <p className="text-sm text-gray-400 mb-4">
+          Applied to your invoice page preview and exported PDFs.
+        </p>
+        <select
+          aria-label="Invoice font"
+          value={fontFamily}
+          onChange={(e) => setValue("fontFamily", e.target.value, { shouldDirty: true, shouldValidate: true })}
+          className="w-full max-w-xs rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        >
+          <option value="">Platform default</option>
+          {BRAND_FONT_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+        {errors.fontFamily && (
+          <p role="alert" className="mt-3 text-sm text-red-400">
+            {errors.fontFamily.message}
+          </p>
+        )}
+      </section>
+
       {/* ── Live preview ─────────────────────────────────────────────────── */}
       <section aria-labelledby="branding-preview-heading" aria-live="polite">
         <h2 id="branding-preview-heading" className="text-lg font-semibold mb-3">
           Invoice preview
         </h2>
-        <div className="rounded-xl bg-white p-5 text-gray-900 shadow-lg">
+        <div className="rounded-xl bg-white p-5 text-gray-900 shadow-lg" style={{ fontFamily: previewFontFamily }}>
           <div className="flex items-center gap-3">
             {logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element -- user-supplied CDN URL

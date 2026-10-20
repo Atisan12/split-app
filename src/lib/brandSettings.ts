@@ -18,6 +18,31 @@ export const LOGO_MIME_EXTENSION: Record<AllowedLogoMimeType, string> = {
 /** Max characters for the invoice tagline. */
 export const MAX_TAGLINE_LENGTH = 120;
 
+/**
+ * Font choices for invoice PDFs/previews. Values are react-pdf's built-in
+ * standard fonts (no custom font embedding needed), with a matching CSS
+ * font-family for the on-screen preview.
+ */
+export const BRAND_FONT_OPTIONS = [
+  { value: "Helvetica", label: "Helvetica (default)", cssFontFamily: "Helvetica, Arial, sans-serif" },
+  { value: "Times-Roman", label: "Times Roman (serif)", cssFontFamily: "'Times New Roman', Times, serif" },
+  { value: "Courier", label: "Courier (monospace)", cssFontFamily: "'Courier New', Courier, monospace" },
+] as const;
+
+export type BrandFont = (typeof BRAND_FONT_OPTIONS)[number]["value"];
+
+const BRAND_FONT_VALUES = BRAND_FONT_OPTIONS.map((o) => o.value) as readonly string[];
+
+/** True when the value is one of the supported invoice fonts. */
+export function isBrandFont(value: string): value is BrandFont {
+  return BRAND_FONT_VALUES.includes(value);
+}
+
+/** Resolves the CSS font-family stack for a brand font (falls back to the default). */
+export function getBrandFontCssFamily(font: string | null | undefined): string {
+  return BRAND_FONT_OPTIONS.find((o) => o.value === font)?.cssFontFamily ?? BRAND_FONT_OPTIONS[0].cssFontFamily;
+}
+
 export const LOGO_TYPE_ERROR =
   "Unsupported file type. Upload a PNG, JPEG, or WebP image.";
 export const LOGO_SIZE_ERROR = "Logo exceeds the 2 MB size limit.";
@@ -40,6 +65,7 @@ export interface BrandSettings {
   logoUrl: string | null;
   accentColor: string | null;
   tagline: string | null;
+  fontFamily: BrandFont | null;
   updatedAt: string;
 }
 
@@ -48,6 +74,7 @@ export const DEFAULT_BRAND_SETTINGS: Omit<BrandSettings, "updatedAt"> = {
   logoUrl: null,
   accentColor: null,
   tagline: null,
+  fontFamily: null,
 };
 
 /** Platform default accent used when no accent color is configured. */
@@ -107,6 +134,11 @@ export const brandSettingsSchema = z.object({
     .max(MAX_TAGLINE_LENGTH, `Tagline must be ${MAX_TAGLINE_LENGTH} characters or fewer`)
     .transform((v) => (v.length === 0 ? null : v))
     .nullable()
+    .optional(),
+  fontFamily: z
+    .union([z.literal(""), z.string().refine(isBrandFont, { message: "Unsupported font selection" })])
+    .nullable()
+    .transform((v) => (v === "" ? null : (v as BrandFont | null) ?? null))
     .optional(),
 });
 
