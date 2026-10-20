@@ -198,7 +198,7 @@ function ComparisonView({ left, right, onClose }: ComparisonViewProps) {
     >
       <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-800">
           <div>
             <h2 className="text-lg font-bold text-white">Version Comparison</h2>
             <p className="text-xs text-gray-400 mt-0.5">
@@ -218,7 +218,7 @@ function ComparisonView({ left, right, onClose }: ComparisonViewProps) {
         </div>
 
         {/* Column headers */}
-        <div className="grid grid-cols-2 gap-4 px-6 pt-4 pb-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 px-4 sm:px-6 pt-4 pb-2">
           <div className="text-xs font-semibold text-indigo-400 uppercase tracking-wide">
             v{left.versionNumber} — {left.action}
           </div>
@@ -228,7 +228,7 @@ function ComparisonView({ left, right, onClose }: ComparisonViewProps) {
         </div>
 
         {/* Comparison body */}
-        <div className="flex-1 overflow-y-auto px-6 pb-6">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 pb-6">
           {allFields.length === 0 ? (
             <div className="py-8 text-center text-gray-500 text-sm">
               No field-level changes recorded for either version.
@@ -239,7 +239,7 @@ function ComparisonView({ left, right, onClose }: ComparisonViewProps) {
                 const leftDiff = leftDiffs.find((d) => d.field === field);
                 const rightDiff = rightDiffs.find((d) => d.field === field);
                 return (
-                  <div key={field} className="grid grid-cols-2 gap-4">
+                  <div key={field} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="rounded-lg border border-gray-800 overflow-hidden">
                       <div className="px-3 py-1.5 text-xs font-mono bg-gray-800 text-gray-400 border-b border-gray-700">
                         {field}
