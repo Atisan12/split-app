@@ -21,6 +21,23 @@ test.describe('Create invoice flow', () => {
     await expect(createPage.totalAmountInput).toHaveValue('200');
   });
 
+  test('back button returns to previous step without losing entered data', async ({ page }) => {
+    const createPage = new CreateInvoicePage(page);
+    await createPage.goto();
+
+    await createPage.fillRecipient('GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJQDP7DC3K2YSJEIPQ76PQXI');
+    await createPage.fillAmount('150');
+    await createPage.clickNext();
+
+    await expect(createPage.backButton).toBeVisible();
+    await createPage.clickBack();
+
+    await expect(createPage.recipientInput).toHaveValue(
+      'GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJQDP7DC3K2YSJEIPQ76PQXI',
+    );
+    await expect(createPage.amountInput).toHaveValue('150');
+  });
+
   test('fill form and submit redirects', async ({ page }) => {
     const createPage = new CreateInvoicePage(page);
     await createPage.goto();
