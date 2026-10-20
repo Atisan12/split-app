@@ -1,8 +1,5 @@
-import {
-  areMilestoneConditionsSatisfied,
-  getInvoiceMilestones,
-} from "./invoiceMilestones";
-import { getActiveDispute } from "./invoiceDisputes";
+import { getMilestones, canReleaseMilestone } from "./invoiceMilestones";
+import { getDisputesByInvoice, isDisputeActive } from "./arbitrators";
 
 export type InvoiceStatus =
   | "Pending"
@@ -125,13 +122,18 @@ export function canReleaseInvoice(invoiceId: string): boolean {
 export function getReleaseCheck(invoiceId: string): ReleaseCheckResult {
   const reasons: string[] = [];
 
-  const dispute = getActiveDispute(invoiceId);
-  if (dispute) {
+  const activeDispute = getDisputesByInvoice(invoiceId).some((d) =>
+    isDisputeActive(d),
+  );
+  if (activeDispute) {
     reasons.push("Invoice has an unresolved dispute");
   }
 
-  const milestones = getInvoiceMilestones(invoiceId);
-  if (milestones.length > 0 && !areMilestoneConditionsSatisfied(invoiceId)) {
+  const milestones = getMilestones(invoiceId);
+  const unmetMilestones = milestones.filter(
+    (m) => !m.released && !canReleaseMilestone(m),
+  );
+  if (unmetMilestones.length > 0) {
     reasons.push("Milestone conditions have not been satisfied");
   }
 
