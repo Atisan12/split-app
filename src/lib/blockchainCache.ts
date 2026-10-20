@@ -32,6 +32,10 @@ export const CACHE_TTL = {
   quote: 5_000,
   /** Contract/account metadata that essentially never changes post-deploy. */
   staticMeta: 5 * 60_000,
+  /** USDC token balance for a wallet. Polled from multiple components
+   * (WalletConnect header, PayModal) on connect/mount; short TTL collapses
+   * those into one RPC simulation without serving noticeably stale data. */
+  balance: 10_000,
 } as const;
 
 export type CacheKind = keyof typeof CACHE_TTL;
