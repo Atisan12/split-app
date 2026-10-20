@@ -60,6 +60,7 @@ export async function PUT(request: NextRequest) {
     logoUrl: parsed.data.logoUrl ?? null,
     accentColor: parsed.data.accentColor ?? null,
     tagline: parsed.data.tagline ?? null,
+    fontFamily: parsed.data.fontFamily ?? null,
   });
 
   return NextResponse.json(saved, { status: 200 });

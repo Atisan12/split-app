@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, Suspense } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
+import { useRegisterShortcuts } from "@/context/ShortcutRegistry";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 import Stepper, { type Step } from "@/components/ui/Stepper";
@@ -651,6 +652,29 @@ function NewInvoiceForm() {
         : {}),
     };
   };
+
+  const formRef = useRef<HTMLFormElement>(null);
+
+  // Cmd/Ctrl+Enter from anywhere in the wizard submits the form — on the
+  // review step this creates the invoice, on earlier steps it advances to
+  // the next step (handleSubmit already implements that distinction).
+  useRegisterShortcuts(
+    [
+      {
+        id: "invoice-new:submit",
+        keys: ["Cmd", "Enter"],
+        description: "Submit / go to next step",
+        group: "Invoices",
+        handler: (e) => {
+          if (e.key !== "Enter") return;
+          if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+          e.preventDefault();
+          formRef.current?.requestSubmit();
+        },
+      },
+    ],
+    [],
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1485,7 +1509,7 @@ function NewInvoiceForm() {
         </p>
       )}
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-6" aria-label="Create invoice form">
+      <form ref={formRef} onSubmit={handleSubmit} className="flex flex-col gap-6" aria-label="Create invoice form">
         {step === 0 && !loading && renderBasicInfo()}
         {step === 1 && !loading && renderRecipients()}
         {step === 2 && !loading && renderOptions()}

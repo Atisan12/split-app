@@ -3,7 +3,12 @@
 import { useCallback, useState } from 'react';
 import type { Invoice } from '@stellar-split/sdk';
 import { formatAmount } from '@stellar-split/sdk';
-import { DEFAULT_ACCENT_COLOR, type BrandSettings } from '@/lib/brandSettings';
+import { DEFAULT_ACCENT_COLOR, BRAND_FONT_OPTIONS, type BrandSettings } from '@/lib/brandSettings';
+
+/** Resolves the react-pdf font name for a brand font (falls back to Helvetica). */
+function resolvePdfFontFamily(font: BrandSettings['fontFamily'] | undefined): string {
+  return BRAND_FONT_OPTIONS.find((o) => o.value === font)?.value ?? 'Helvetica';
+}
 
 interface Props {
   invoice: Invoice;
@@ -39,6 +44,7 @@ async function downloadReceiptPdf(invoice: Invoice, total: bigint, brand: BrandS
   const { pdf, Document, Page, Text, View, StyleSheet, Image } = await import('@react-pdf/renderer');
 
   const accent = brand?.accentColor ?? DEFAULT_ACCENT_COLOR;
+  const fontFamily = resolvePdfFontFamily(brand?.fontFamily);
   const logoDataUrl = brand?.logoUrl ? await fetchLogoDataUrl(brand.logoUrl) : null;
   const qrCodeDataUrl = await generateQrCodeDataUrl(invoice.id);
   const exportedAt = new Date().toLocaleString();
@@ -48,7 +54,7 @@ async function downloadReceiptPdf(invoice: Invoice, total: bigint, brand: BrandS
       : `https://stellarsplit-dapp.vercel.app/verify/${invoice.id}`;
 
   const styles = StyleSheet.create({
-    page: { padding: 36, fontSize: 10, fontFamily: 'Helvetica', color: '#111', backgroundColor: '#fff' },
+    page: { padding: 36, fontSize: 10, fontFamily, color: '#111', backgroundColor: '#fff' },
     banner: { backgroundColor: accent, padding: '10 16', marginBottom: 18, borderRadius: 4 },
     bannerTitle: { fontSize: 16, fontWeight: 'bold', color: '#fff' },
     bannerSubtitle: { fontSize: 9, color: 'rgba(255,255,255,0.8)', marginTop: 2 },
@@ -172,12 +178,13 @@ export default function InvoiceExportButton({ invoice, total, branding }: Props)
 
       const brand = await resolveBranding();
       const accent = brand?.accentColor ?? DEFAULT_ACCENT_COLOR;
+      const fontFamily = resolvePdfFontFamily(brand?.fontFamily);
       const logoDataUrl = brand?.logoUrl ? await fetchLogoDataUrl(brand.logoUrl) : null;
       const qrCodeDataUrl = await generateQrCodeDataUrl(invoice.id);
       const exportedAt = new Date().toLocaleString();
 
       const styles = StyleSheet.create({
-        page: { padding: 40, fontSize: 11, fontFamily: 'Helvetica', color: '#111' },
+        page: { padding: 40, fontSize: 11, fontFamily, color: '#111' },
         header: { marginBottom: 24 },
         logo: { height: 40, width: 'auto', marginBottom: 8, objectFit: 'contain' },
         title: { fontSize: 22, fontWeight: 'bold', marginBottom: 4, color: accent },
