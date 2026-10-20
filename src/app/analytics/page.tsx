@@ -8,18 +8,6 @@ import { getFreighterPublicKey } from "@/lib/freighter";
 import { generateCsv, type CsvRow } from "@/lib/csvExport";
 import type { Invoice } from "@stellar-split/sdk";
 import ChartBuilder, { type ChartBuilderDataPoint } from "@/components/analytics/ChartBuilder";
-import {
-  getEventCounts,
-  getFunnel,
-  getActiveWalletCount,
-  type AnalyticsEventName,
-} from "@/lib/analytics";
-import {
-  computeAgingBuckets,
-  computeAgingTrend,
-  type AgingBucket,
-  type AgingTrendPoint,
-} from "@/lib/invoiceAging";
 
 const STROOPS = 10_000_000;
 
@@ -46,16 +34,6 @@ const DynamicUniquePayersChart = dynamic(
 
 const DynamicFundingTimeHistogram = dynamic(
   () => import("@/components/analytics/FundingTimeHistogram"),
-  { ssr: false }
-);
-
-const DynamicAgingBucketChart = dynamic(
-  () => import("@/components/analytics/AgingBucketChart"),
-  { ssr: false }
-);
-
-const DynamicAgingTrendChart = dynamic(
-  () => import("@/components/analytics/AgingTrendChart"),
   { ssr: false }
 );
 
@@ -141,27 +119,12 @@ export default function AnalyticsPage() {
   const [error, setError] = useState<string | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [appMetrics, setAppMetrics] = useState<{
-    eventCounts: Record<AnalyticsEventName, number>;
-    funnel: { label: string; count: number }[];
-    activeWallets: number;
-  } | null>(null);
+  const [drilldownStatus, setDrilldownStatus] = useState<string | null>(null);
 
   useEffect(() => {
     getFreighterPublicKey()
       .then(setPublicKey)
       .catch(() => setError("Connect your Freighter wallet to view analytics."));
-  }, []);
-
-  useEffect(() => {
-    try {
-      const eventCounts = getEventCounts();
-      const funnel = getFunnel();
-      const activeWallets = getActiveWalletCount();
-      setAppMetrics({ eventCounts, funnel, activeWallets });
-    } catch {
-      setAppMetrics(null);
-    }
   }, []);
 
   useEffect(() => {
@@ -202,6 +165,23 @@ export default function AnalyticsPage() {
       return true;
     });
   }, [invoices, dateFrom, dateTo]);
+
+  const drilldownInvoices = useMemo(() => {
+    if (!drilldownStatus) return [];
+    const now = Date.now() / 1000;
+    switch (drilldownStatus) {
+      case "Released":
+        return filtered.filter((i) => i.status === "Released");
+      case "Refunded":
+        return filtered.filter((i) => i.status === "Refunded");
+      case "Active":
+        return filtered.filter((i) => i.status === "Pending" && i.deadline >= now);
+      case "Expired":
+        return filtered.filter((i) => i.status === "Pending" && i.deadline < now);
+      default:
+        return [];
+    }
+  }, [filtered, drilldownStatus]);
 
   const stats = useMemo(() => {
     const total = filtered.length;
@@ -343,13 +323,6 @@ export default function AnalyticsPage() {
     };
   }, [filtered]);
 
-  const aging = useMemo(() => {
-    const now = Math.floor(Date.now() / 1000);
-    const buckets: AgingBucket[] = computeAgingBuckets(filtered, now);
-    const trend: AgingTrendPoint[] = computeAgingTrend(filtered, now);
-    return { buckets, trend };
-  }, [filtered]);
-
   const csvRows = useMemo<CsvRow[]>(() => {
     return filtered.map((inv) => ({
       id: inv.id,
@@ -480,10 +453,50 @@ export default function AnalyticsPage() {
               Invoice Status Breakdown
             </h2>
             <Suspense fallback={<ChartFallback />}>
-              <DynamicStatusPieChart data={stats.statusData} />
+              <DynamicStatusPieChart
+                data={stats.statusData}
+                onSliceClick={(name) => setDrilldownStatus(name)}
+              />
             </Suspense>
+            <p className="text-xs text-gray-500 mt-2">
+              Click a slice to drill into those invoices.
+            </p>
           </div>
         </div>
+
+        {drilldownStatus && (
+          <div
+            className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-8"
+            data-testid="status-drilldown-panel"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+                {drilldownStatus} invoices ({drilldownInvoices.length})
+              </h2>
+              <button
+                type="button"
+                onClick={() => setDrilldownStatus(null)}
+                className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+              >
+                Clear
+              </button>
+            </div>
+            {drilldownInvoices.length === 0 ? (
+              <p className="text-sm text-gray-500">No invoices in this category.</p>
+            ) : (
+              <ul className="divide-y divide-gray-800">
+                {drilldownInvoices.slice(0, 50).map((inv) => (
+                  <li key={inv.id} className="py-2 flex items-center justify-between text-sm">
+                    <span className="text-gray-300">Invoice #{inv.id}</span>
+                    <span className="text-gray-500">
+                      {stroopsToUsdc(inv.funded).toFixed(2)} USDC
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
           <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
@@ -507,99 +520,6 @@ export default function AnalyticsPage() {
 
         <div className="mb-8">
           <ChartBuilder data={stats.chartBuilderData} />
-        </div>
-
-        <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-8">
-          <h2 className="text-sm font-semibold text-gray-300 mb-4 uppercase tracking-wider">
-            Application Metrics
-          </h2>
-          {!appMetrics ? (
-            <p className="text-gray-500 text-sm text-center py-8">
-              No application metrics available.
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">
-                  Event Counts
-                </p>
-                <ul className="space-y-1.5 text-sm">
-                  {Object.entries(appMetrics.eventCounts).map(([name, count]) => (
-                    <li
-                      key={name}
-                      className="flex items-center justify-between border-b border-gray-800/60 py-1.5"
-                    >
-                      <span className="text-gray-400">{name}</span>
-                      <span className="text-indigo-300 font-medium">{count}</span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="text-xs text-gray-500 mt-4">
-                  Active wallets:{" "}
-                  <span className="text-indigo-300 font-medium">
-                    {appMetrics.activeWallets}
-                  </span>
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">
-                  Funnel (create → pay → release)
-                </p>
-                <ul className="space-y-2 text-sm">
-                  {appMetrics.funnel.map((step) => (
-                    <li key={step.label}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-gray-400">{step.label}</span>
-                        <span className="text-indigo-300 font-medium">
-                          {step.count}
-                        </span>
-                      </div>
-                      <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-indigo-500"
-                          style={{
-                            width: `${
-                              appMetrics.funnel[0]?.count
-                                ? Math.min(
-                                    100,
-                                    (step.count / appMetrics.funnel[0].count) *
-                                      100
-                                  )
-                                : 0
-                            }%`,
-                          }}
-                        />
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-8">
-          <h2 className="text-sm font-semibold text-gray-300 mb-4 uppercase tracking-wider">
-            Invoice Aging
-          </h2>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">
-                Aging Buckets
-              </p>
-              <Suspense fallback={<ChartFallback />}>
-                <DynamicAgingBucketChart data={aging.buckets} />
-              </Suspense>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">
-                Aging Trend
-              </p>
-              <Suspense fallback={<ChartFallback />}>
-                <DynamicAgingTrendChart data={aging.trend} />
-              </Suspense>
-            </div>
-          </div>
         </div>
 
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-8">

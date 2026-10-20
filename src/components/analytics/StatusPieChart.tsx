@@ -11,11 +11,13 @@ import {
 
 export interface StatusPieChartProps {
   data: { name: string; value: number }[];
+  /** Called with the status name when a slice (or its legend entry) is clicked, for drill-down. */
+  onSliceClick?: (name: string) => void;
 }
 
 const COLORS = ["#10b981", "#ef4444", "#3b82f6", "#f59e0b"];
 
-export default function StatusPieChart({ data }: StatusPieChartProps) {
+export default function StatusPieChart({ data, onSliceClick }: StatusPieChartProps) {
   const total = data.reduce((s, d) => s + d.value, 0);
 
   if (total === 0) {
@@ -45,6 +47,8 @@ export default function StatusPieChart({ data }: StatusPieChartProps) {
             label={({ name, percent }) =>
               `${name} ${(percent * 100).toFixed(0)}%`
             }
+            onClick={(entry) => onSliceClick?.(entry.name)}
+            cursor={onSliceClick ? "pointer" : undefined}
           >
             {data.map((_, index) => (
               <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />

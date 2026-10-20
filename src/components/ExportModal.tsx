@@ -4,11 +4,6 @@ import React, { useState, useCallback } from 'react';
 import type { Invoice } from '@stellar-split/sdk';
 import type { ExportFilterOptions } from '@/lib/invoiceExcelExport';
 import { downloadExcel, generateExportFilename } from '@/lib/invoiceExcelExport';
-import {
-  downloadAgingReportCsv,
-  downloadAgingReportExcel,
-  generateAgingReportFilename,
-} from '@/lib/invoiceAgingExport';
 import { apiFetch } from '@/lib/apiClient';
 
 /** Return a date string in "YYYY-MM-DD" format for an offset of `daysAgo` from today. */
@@ -32,9 +27,7 @@ export default function ExportModal({
   onExport,
 }: ExportModalProps) {
   const [isExporting, setIsExporting] = useState(false);
-  const [isExportingAging, setIsExportingAging] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   // Date-range state — "From" defaults to 30 days ago, "To" defaults to today
   const [startDate, setStartDate] = useState<string>(() => dateString(30));
@@ -75,38 +68,30 @@ export default function ExportModal({
     return true;
   };
 
-  /** Build the shared filter options from the current modal state. */
-  const buildFilters = useCallback((): ExportFilterOptions => {
-    const filters: ExportFilterOptions = {};
-
-    if (startDate) {
-      filters.startDate = new Date(startDate).getTime() / 1000;
-    }
-    if (endDate) {
-      // Include the full end day by advancing to end-of-day
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
-      filters.endDate = end.getTime() / 1000;
-    }
-    if (selectedStatuses.length > 0) {
-      filters.statuses = selectedStatuses;
-    }
-    if (selectedAssets.length > 0) {
-      filters.assets = selectedAssets;
-    }
-
-    return filters;
-  }, [startDate, endDate, selectedStatuses, selectedAssets]);
-
   const handleExport = useCallback(async () => {
     if (!validateDateRange()) return;
 
     setIsExporting(true);
     setError(null);
-    setSuccess(null);
 
     try {
-      const filters = buildFilters();
+      const filters: ExportFilterOptions = {};
+
+      if (startDate) {
+        filters.startDate = new Date(startDate).getTime() / 1000;
+      }
+      if (endDate) {
+        // Include the full end day by advancing to end-of-day
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filters.endDate = end.getTime() / 1000;
+      }
+      if (selectedStatuses.length > 0) {
+        filters.statuses = selectedStatuses;
+      }
+      if (selectedAssets.length > 0) {
+        filters.assets = selectedAssets;
+      }
 
       // Build query params so the API route can also filter server-side
       const params = new URLSearchParams();
@@ -158,58 +143,25 @@ export default function ExportModal({
       setIsExporting(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [invoices, buildFilters, startDate, endDate, onExport, onClose]);
-
-  /** Export the aging report (CSV or Excel) using the current filters. */
-  const handleExportAging = useCallback(
-    async (format: 'csv' | 'excel') => {
-      if (!validateDateRange()) return;
-
-      setIsExportingAging(true);
-      setError(null);
-      setSuccess(null);
-
-      try {
-        const filters = buildFilters();
-
-        if (format === 'csv') {
-          downloadAgingReportCsv(invoices, filters);
-        } else {
-          downloadAgingReportExcel(invoices, filters);
-        }
-
-        setSuccess(
-          `Aging report exported as ${generateAgingReportFilename(format)}.`
-        );
-        onExport?.();
-      } catch (err) {
-        setError(
-          err instanceof Error ? err.message : 'Aging report export failed'
-        );
-      } finally {
-        setIsExportingAging(false);
-      }
-    },
-    [invoices, buildFilters, onExport]
-  );
+  }, [invoices, startDate, endDate, selectedStatuses, selectedAssets, onExport, onClose]);
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+        <div className="sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex justify-between items-center">
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">Export Invoices</h2>
-            <p className="text-sm text-gray-600 mt-1">
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Export Invoices</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
               {invoices.length} invoice{invoices.length !== 1 ? 's' : ''} available
             </p>
           </div>
           <button
             onClick={onClose}
             disabled={isExporting}
-            className="text-gray-400 hover:text-gray-600 focus:outline-none disabled:opacity-50"
+            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 focus:outline-none disabled:opacity-50"
           >
             <svg
               className="w-6 h-6"
@@ -230,33 +182,21 @@ export default function ExportModal({
         {/* Content */}
         <div className="px-6 py-6 space-y-6">
           {error && (
-            <div
-              role="alert"
-              className="p-4 bg-red-50 border border-red-200 rounded text-sm text-red-800"
-            >
+            <div className="p-4 bg-red-50 border border-red-200 rounded text-sm text-red-800">
               {error}
-            </div>
-          )}
-
-          {success && (
-            <div
-              role="status"
-              className="p-4 bg-green-50 border border-green-200 rounded text-sm text-green-800"
-            >
-              {success}
             </div>
           )}
 
           {/* Date Range */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Date Range
             </label>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label
                   htmlFor="export-from"
-                  className="block text-xs text-gray-500 mb-1"
+                  className="block text-xs text-gray-500 dark:text-gray-400 mb-1"
                 >
                   From
                 </label>
@@ -271,13 +211,13 @@ export default function ExportModal({
                   disabled={isExporting}
                   aria-describedby={dateRangeError ? 'export-date-error' : undefined}
                   aria-invalid={!!dateRangeError}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 dark:disabled:bg-gray-700"
                 />
               </div>
               <div>
                 <label
                   htmlFor="export-to"
-                  className="block text-xs text-gray-500 mb-1"
+                  className="block text-xs text-gray-500 dark:text-gray-400 mb-1"
                 >
                   To
                 </label>
@@ -292,7 +232,7 @@ export default function ExportModal({
                   disabled={isExporting}
                   aria-describedby={dateRangeError ? 'export-date-error' : undefined}
                   aria-invalid={!!dateRangeError}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100 dark:disabled:bg-gray-700"
                 />
               </div>
             </div>
@@ -309,7 +249,7 @@ export default function ExportModal({
 
           {/* Status Filter */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Status
             </label>
             <div className="space-y-2">
@@ -320,9 +260,9 @@ export default function ExportModal({
                     checked={selectedStatuses.includes(status)}
                     onChange={() => handleStatusChange(status)}
                     disabled={isExporting}
-                    className="w-4 h-4 border-gray-300 rounded focus:ring-indigo-500 disabled:opacity-50"
+                    className="w-4 h-4 border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded focus:ring-indigo-500 disabled:opacity-50"
                   />
-                  <span className="ml-2 text-sm text-gray-700">{status}</span>
+                  <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{status}</span>
                 </label>
               ))}
             </div>
@@ -330,7 +270,7 @@ export default function ExportModal({
 
           {/* Asset Filter */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Assets
             </label>
             <div className="space-y-2">
@@ -341,56 +281,27 @@ export default function ExportModal({
                     checked={selectedAssets.includes(asset)}
                     onChange={() => handleAssetChange(asset)}
                     disabled={isExporting}
-                    className="w-4 h-4 border-gray-300 rounded focus:ring-indigo-500 disabled:opacity-50"
+                    className="w-4 h-4 border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded focus:ring-indigo-500 disabled:opacity-50"
                   />
-                  <span className="ml-2 text-sm text-gray-700">{asset}</span>
+                  <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{asset}</span>
                 </label>
               ))}
-            </div>
-          </div>
-
-          {/* Aging Report Export */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Aging Report
-            </label>
-            <p className="text-xs text-gray-500 mb-2">
-              Export invoice aging buckets, overdue rates and collection
-              efficiency for the selected date range and filters.
-            </p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => handleExportAging('csv')}
-                disabled={isExporting || isExportingAging || invoices.length === 0}
-                className="flex-1 px-3 py-2 text-sm text-indigo-700 border border-indigo-300 rounded-lg hover:bg-indigo-50 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isExportingAging ? 'Exporting...' : 'Export Aging (CSV)'}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleExportAging('excel')}
-                disabled={isExporting || isExportingAging || invoices.length === 0}
-                className="flex-1 px-3 py-2 text-sm text-indigo-700 border border-indigo-300 rounded-lg hover:bg-indigo-50 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isExportingAging ? 'Exporting...' : 'Export Aging (Excel)'}
-              </button>
             </div>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-4">
+        <div className="sticky bottom-0 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-6 py-4 flex justify-end gap-4">
           <button
             onClick={onClose}
-            disabled={isExporting || isExportingAging}
-            className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={isExporting}
+            className="px-4 py-2 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Cancel
           </button>
           <button
             onClick={handleExport}
-            disabled={isExporting || isExportingAging || invoices.length === 0}
+            disabled={isExporting || invoices.length === 0}
             className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isExporting ? 'Exporting...' : 'Export to Excel'}
