@@ -101,3 +101,9 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide.
 
 <!-- handsoff-issue-844 -->
 - #844: Implement advanced invoice personalization engine
+
+<!-- handsoff-issue-989 -->
+- #989: Implement customizable dashboards with drag-and-drop widgets
+
+<!-- handsoff-issue-991 -->
+- #991: Implement custom report builder and scheduling
