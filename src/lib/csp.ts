@@ -28,13 +28,18 @@ export function buildCSP(nonce: string, { allowFraming = false, frameOrigin }: B
     `style-src 'self' 'nonce-${nonce}' 'unsafe-inline'`,
     `img-src 'self' data: blob: https://www.gravatar.com`,
     `font-src 'self' data:`,
-    `connect-src 'self' https://*.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org https://soroban-testnet.stellar.org`,
+    `connect-src ${uniqueConnectSrc.join(' ')}`,
     `object-src 'none'`,
     `base-uri 'self'`,
     `form-action 'self'`,
     `frame-ancestors ${frameAncestors}`,
     `upgrade-insecure-requests`,
   ];
+
+  if (reportUri) {
+    directives.push(`report-uri ${reportUri}`);
+  }
+
   return directives.join("; ");
 }
 
