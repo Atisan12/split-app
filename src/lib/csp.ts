@@ -15,9 +15,13 @@ export interface BuildCSPOptions {
    * browsers that honour CSP over the legacy header.
    */
   allowFraming?: boolean;
+  frameOrigin?: string | null;
 }
 
-export function buildCSP(nonce: string, { allowFraming = false }: BuildCSPOptions = {}): string {
+export function buildCSP(nonce: string, { allowFraming = false, frameOrigin }: BuildCSPOptions = {}): string {
+  const frameAncestors = frameOrigin === null
+    ? "'none'"
+    : frameOrigin ?? (allowFraming ? "*" : "'none'");
   const directives = [
     `default-src 'self'`,
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
@@ -28,7 +32,7 @@ export function buildCSP(nonce: string, { allowFraming = false }: BuildCSPOption
     `object-src 'none'`,
     `base-uri 'self'`,
     `form-action 'self'`,
-    allowFraming ? `frame-ancestors *` : `frame-ancestors 'none'`,
+    `frame-ancestors ${frameAncestors}`,
     `upgrade-insecure-requests`,
   ];
   return directives.join("; ");

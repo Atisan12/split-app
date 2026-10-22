@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { splitClient } from "@/lib/stellar";
 
-export type NotificationType = "payment" | "funded" | "released" | "expired";
+export type NotificationType = "payment" | "funded" | "released" | "expired" | "approval";
 
 export interface AppNotification {
   id: string;
@@ -16,6 +16,7 @@ export interface AppNotification {
   read: boolean;
   /** Subscription id, present for subscription-related notifications. */
   subscriptionId?: string;
+  approvalRequestId?: string;
 }
 
 const STORAGE_KEY = "stellarsplit_notifications_v2";
@@ -64,6 +65,7 @@ const TYPE_ICONS: Record<NotificationType, string> = {
   funded: "✅",
   released: "🚀",
   expired: "⏰",
+  approval: "📝",
 };
 
 export default function NotificationCenter() {
@@ -82,8 +84,13 @@ export default function NotificationCenter() {
     const onStorage = (e: StorageEvent) => {
       if (e.key === STORAGE_KEY) syncFromStorage();
     };
+    const onApprovalNotification = () => syncFromStorage();
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener("approval-notifications-updated", onApprovalNotification);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("approval-notifications-updated", onApprovalNotification);
+    };
   }, [syncFromStorage]);
 
   // Poll subscribed invoices every 30 seconds
@@ -310,7 +317,9 @@ export default function NotificationCenter() {
               {sorted.map((n, idx) => (
                 <li key={n.id} role="listitem">
                   <Link
-                    href={`/invoice/${n.invoiceId}`}
+                    href={n.type === "approval"
+                      ? `/approvals?request=${encodeURIComponent(n.approvalRequestId ?? n.invoiceId)}`
+                      : `/invoice/${n.invoiceId}`}
                     ref={idx === 0 ? (firstItemRef as React.Ref<HTMLAnchorElement>) : undefined}
                     onClick={() => { markRead(n.id); setOpen(false); }}
                     className={`flex items-start gap-3 w-full px-4 py-3 hover:bg-white/[0.04] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500 ${

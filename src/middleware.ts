@@ -38,6 +38,20 @@ function getBackupWebhookOrigins(): string[] {
 export function middleware(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const isEmbed = request.nextUrl.pathname.startsWith("/embed/");
+  const isAnalyticsEmbed = request.nextUrl.pathname.startsWith("/embed/analytics/");
+  const requestedFrameOrigin = request.nextUrl.searchParams.get("origin");
+  let frameOrigin: string | null | undefined;
+  if (isAnalyticsEmbed) {
+    try {
+      const parsedOrigin = new URL(requestedFrameOrigin ?? "");
+      frameOrigin = parsedOrigin.origin === requestedFrameOrigin &&
+        (parsedOrigin.protocol === "https:" || parsedOrigin.hostname === "localhost")
+        ? parsedOrigin.origin
+        : null;
+    } catch {
+      frameOrigin = null;
+    }
+  }
 
   const connectSrc = [
     ...getAnalyticsOrigins(),
@@ -46,11 +60,13 @@ export function middleware(request: NextRequest) {
 
   const csp = buildCSP(nonce, {
     allowFraming: isEmbed,
+    frameOrigin,
     connectSrc: connectSrc.length > 0 ? connectSrc : undefined,
   });
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set(CSP_NONCE_HEADER, nonce);
+  requestHeaders.set("x-app-pathname", request.nextUrl.pathname);
   requestHeaders.set("Content-Security-Policy", csp);
 
   const response = NextResponse.next({

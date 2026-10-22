@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   SUPPORTED_CHAINS,
   estimateBridgeFee,
@@ -8,6 +8,7 @@ import {
   buildBridgePayment,
   pollBridgeStatus,
 } from "@/lib/bridge";
+import { recordPaymentConversion, recordPaymentTouchpoint } from "@/lib/paymentAttribution";
 import type {
   SupportedChain,
   FeeEstimate,
@@ -263,6 +264,7 @@ type Step = "select" | "wallet" | "submit" | "polling" | "done";
  *  5. Poll status until Stellar relay confirmed
  */
 export default function CrossChainPayment({ invoiceId, stellarDestination }: Props) {
+  const recordedBridgeIds = useRef(new Set<string>());
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>("select");
 
@@ -372,7 +374,28 @@ export default function CrossChainPayment({ invoiceId, stellarDestination }: Pro
 
       await pollBridgeStatus(result.bridgeId, (s) => {
         setStatusResult(s);
-        if (s.status === "confirmed") setStep("done");
+        if (s.status === "confirmed") {
+          setStep("done");
+          if (!recordedBridgeIds.current.has(result.bridgeId)) {
+            recordedBridgeIds.current.add(result.bridgeId);
+            const timestamp = Date.now();
+            recordPaymentTouchpoint({
+              invoiceId,
+              timestamp: timestamp - 1,
+              channel: `bridge:${chain}`,
+              source: chain,
+              type: "payment-method",
+            });
+            recordPaymentConversion({
+              invoiceId,
+              timestamp,
+              amount: Number.parseFloat(amount),
+              currency: "USDC",
+              channel: `bridge:${chain}`,
+              txHash: result.sourceTxHash,
+            });
+          }
+        }
       });
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : String(e));

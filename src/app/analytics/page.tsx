@@ -11,6 +11,8 @@ import ChartBuilder, { type ChartBuilderDataPoint } from "@/components/analytics
 import AnalyticsPanel from "@/components/subscriptions/AnalyticsPanel";
 import DataQualityPanel from "@/components/DataQualityPanel";
 import { loadSubscriptions, type Subscription } from "@/lib/subscriptions";
+import AttributionAnalyticsPanel from "@/components/analytics/AttributionAnalyticsPanel";
+import BenchmarkAnalyticsPanel from "@/components/analytics/BenchmarkAnalyticsPanel";
 
 const STROOPS = 10_000_000;
 
