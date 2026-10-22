@@ -15,22 +15,31 @@ export interface BuildCSPOptions {
    * browsers that honour CSP over the legacy header.
    */
   allowFraming?: boolean;
+  frameOrigin?: string | null;
 }
 
-export function buildCSP(nonce: string, { allowFraming = false }: BuildCSPOptions = {}): string {
+export function buildCSP(nonce: string, { allowFraming = false, frameOrigin }: BuildCSPOptions = {}): string {
+  const frameAncestors = frameOrigin === null
+    ? "'none'"
+    : frameOrigin ?? (allowFraming ? "*" : "'none'");
   const directives = [
     `default-src 'self'`,
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
     `style-src 'self' 'nonce-${nonce}' 'unsafe-inline'`,
     `img-src 'self' data: blob: https://www.gravatar.com`,
     `font-src 'self' data:`,
-    `connect-src 'self' https://*.stellar.org https://horizon-testnet.stellar.org https://horizon.stellar.org https://soroban-testnet.stellar.org`,
+    `connect-src ${uniqueConnectSrc.join(' ')}`,
     `object-src 'none'`,
     `base-uri 'self'`,
     `form-action 'self'`,
-    allowFraming ? `frame-ancestors *` : `frame-ancestors 'none'`,
+    `frame-ancestors ${frameAncestors}`,
     `upgrade-insecure-requests`,
   ];
+
+  if (reportUri) {
+    directives.push(`report-uri ${reportUri}`);
+  }
+
   return directives.join("; ");
 }
 
